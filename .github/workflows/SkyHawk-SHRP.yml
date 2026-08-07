@@ -105,26 +105,33 @@ jobs:
     - name: Repo Sync
       run: |
         cd android-recovery
-        repo sync -j$(nproc --all) --force-sync
+        echo "::group::Syncing repositories with optimized settings..."
+        repo sync -j4 --force-sync --no-clone-bundle --current-branch
+        echo "::endgroup::"
 
-    # Tu fork de bootable/recovery con los fixes de SHRP ya aplicados, en
-    # vez del bootable/recovery genérico que trae el manifest.
     - name: Reemplazar bootable/recovery con mi fork (shrp_android_bootable_recovery)
       run: |
         cd android-recovery
+        echo "::group::Removing stock recovery..."
         rm -rf bootable/recovery
+        echo "::endgroup::"
+        echo "::group::Cloning custom recovery fork..."
         git clone --branch ${{ env.RECOVERY_CORE_BRANCH }} --depth 1 ${{ env.RECOVERY_CORE }} bootable/recovery
+        echo "::endgroup::"
 
     - name: Clone Device Tree
       run: |
         cd android-recovery
+        echo "::group::Cloning device tree..."
         git clone ${{ env.DEVICE_TREE }} -b ${{ env.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        echo "::endgroup::"
 
     - name: Extracting variables from .mk file
       run: |
         cd android-recovery/device_tree
+        echo "::group::Extracting device configuration..."
         # Initialize variables
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
@@ -145,30 +152,43 @@ jobs:
                 break
             fi
         done
+        echo "::endgroup::"
         # Navigate to the parent directory
         cd ../
         # Create the necessary directories
+        echo "::group::Setting up device directory structure..."
         echo "Creating directory: $DEVICE_DIRECTORY"
         mkdir -p "$DEVICE_DIRECTORY"
         # Move device_tree folder to device_directory and rename it to $DEVICE_NAME
         echo "Moving device_tree to $DEVICE_DIRECTORY/$DEVICE_NAME"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
+        echo "::endgroup::"
 
     - name: Installing python2 for legacy builds
       if: env.CHECK_LEGACY_BRANCH == 'true'
       run: |
+        echo "::group::Installing Python2..."
         sudo apt-get install python2 python-is-python2
+        echo "::endgroup::"
 
     - name: Building SkyHawk
       run: |
         cd android-recovery
+        echo "::group::Setting up build environment..."
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ env.DEVICE_MAKEFILE }}-eng && make clean && mka ${{ inputs.BUILD_TARGET }}image -j$(nproc --all)
+        echo "::endgroup::"
+        echo "::group::Launching lunch: ${{ env.DEVICE_MAKEFILE }}-eng..."
+        lunch ${{ env.DEVICE_MAKEFILE }}-eng
+        echo "::endgroup::"
+        echo "::group::Building ${{ inputs.BUILD_TARGET }}.img (without clean for faster iteration)..."
+        mka ${{ inputs.BUILD_TARGET }}image -j16
+        echo "::endgroup::"
         echo "Done building your ${{ inputs.BUILD_TARGET }}.img"
 
     - name: Set build target for upload
       run: |
+        echo "::group::Setting build target variables..."
         if [ ${{ inputs.BUILD_TARGET }} == 'recovery' ]; then
            echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
         elif [ ${{ inputs.BUILD_TARGET }} == 'boot' ]; then
@@ -176,10 +196,13 @@ jobs:
         else
            echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
+        echo "::endgroup::"
 
-    - name: Set Build Date # Output will be use in Release
+    - name: Set Build Date
       run: |
+        echo "::group::Setting build date..."
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+        echo "::endgroup::"
       
     - name: Upload to Release
       uses: softprops/action-gh-release@master
@@ -198,10 +221,12 @@ jobs:
     - name: Run LDCheck
       if: inputs.LDCHECK == 'true'
       run: |
+        echo "::group::Running LDCheck analysis..."
         cd tools
         mv -n libneeds ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
         mv -n ldcheck ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
         cd ../android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
+        echo "::endgroup::"
         echo "Done checking missing dependencies. Review, and reconfigure your tree."
       continue-on-error: true
