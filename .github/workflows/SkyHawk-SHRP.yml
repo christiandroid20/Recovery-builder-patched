@@ -10,19 +10,11 @@ on:
       MANIFEST_BRANCH:
         description: 'SHRP Manifest Branch'
         required: true
-        default: ''
+        default: 'shrp-12.1'
         type: choice
         options:
         - shrp-12.1
         - shrp-9.0
-      DEVICE_TREE:
-        description: 'Custom Recovery Tree' # Your already made Device Tree for TWRP
-        required: true
-        default: 'https://github.com/lazycodebuilder/recovery_rmx1851' 
-      DEVICE_TREE_BRANCH:
-        description: 'Custom Recovery Tree Branch' # Your Device Tree Branch, make sure it's right.
-        required: true
-        default: 'android-14_shrp'
       BUILD_TARGET:
         description: 'Specify your Build Target' # Pick among boot, recovery and vendor_boot
         required: true
@@ -49,6 +41,11 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Tu device tree y tu fork del recovery core, ya incrustados (antes eran inputs)
+      DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
+      DEVICE_TREE_BRANCH: shrp-12.1
+      RECOVERY_CORE: https://github.com/christiandroid20/shrp_android_bootable_recovery.git
+      RECOVERY_CORE_BRANCH: android-12.1
     permissions:
       contents: write
     steps:
@@ -59,8 +56,7 @@ jobs:
       run: |
         echo "Displaying variables/inputs."
         echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree: ${{ inputs.DEVICE_TREE }}"
-        echo "Device Branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Tree: ${{ env.DEVICE_TREE }} (${{ env.DEVICE_TREE_BRANCH }})"
         echo "Build Target: ${{ inputs.BUILD_TARGET }}image"
 
     - name: Cleanup
@@ -110,11 +106,19 @@ jobs:
       run: |
         cd android-recovery
         repo sync -j$(nproc --all) --force-sync
-      
+
+    # Tu fork de bootable/recovery con los fixes de SHRP ya aplicados, en
+    # vez del bootable/recovery genérico que trae el manifest.
+    - name: Reemplazar bootable/recovery con mi fork (shrp_android_bootable_recovery)
+      run: |
+        cd android-recovery
+        rm -rf bootable/recovery
+        git clone --branch ${{ env.RECOVERY_CORE_BRANCH }} --depth 1 ${{ env.RECOVERY_CORE }} bootable/recovery
+
     - name: Clone Device Tree
       run: |
         cd android-recovery
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
+        git clone ${{ env.DEVICE_TREE }} -b ${{ env.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -188,8 +192,8 @@ jobs:
         tag_name: ${{ github.run_id }}
         body: |
           Build: ${{ inputs.MANIFEST_BRANCH }}
-          Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
+          Device: [Device Tree/Branch](${{ env.DEVICE_TREE }}/tree/${{ env.DEVICE_TREE_BRANCH }})
+          Commit: Most recent [commit](${{ env.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
 
     - name: Run LDCheck
       if: inputs.LDCHECK == 'true'
