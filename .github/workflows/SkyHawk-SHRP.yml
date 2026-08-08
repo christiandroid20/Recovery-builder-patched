@@ -101,10 +101,12 @@ jobs:
 
     - name: Check Manifest Branch
       run: |
-        if [ ${{ inputs.MANIFEST_BRANCH }} == 'v3_11.0' ] || [ ${{ inputs.MANIFEST_BRANCH }} == 'shrp-12.1' ]; then
-            echo "CHECK_LEGACY_BRANCH=false" >> $GITHUB_ENV
+        # SHRP 12.1 still requires Python 2.7 for parts of the legacy build
+        # tooling. Keep this explicitly enabled for the branch we are building.
+        if [ "${{ inputs.MANIFEST_BRANCH }}" = "shrp-12.1" ]; then
+            echo "CHECK_LEGACY_BRANCH=true" >> "$GITHUB_ENV"
         else
-            echo "CHECK_LEGACY_BRANCH=true" >> $GITHUB_ENV
+            echo "CHECK_LEGACY_BRANCH=false" >> "$GITHUB_ENV"
         fi
 
     - name: 📦 Prepare the environment
@@ -137,20 +139,55 @@ jobs:
         distribution: 'zulu'
         java-version: '8'
 
-    - name: 🐍 Install Python 2.7 (solo ramas legacy)
-      if: env.CHECK_LEGACY_BRANCH == 'true'
+    - name: 🐍 Install Python 2.7 for SHRP 12.1
+      if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+      shell: bash
       run: |
-        echo "::notice::🐍 Installing Python 2.7 (rama legacy)..."
-        # jammy no trae paquetes de python2 en ningún repo; se sacan del
-        # archivo de 20.04 (focal), igual que ncurses5 arriba.
-        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
+        set -euo pipefail
+        echo "::notice::🐍 Installing Python 2.7 for SHRP 12.1..."
+
+        # Ubuntu 22.04 (jammy) no longer ships Python 2.7. SHRP 12.1
+        # still invokes /usr/bin/env python2.7, so install the 2.7 packages
+        # from Ubuntu 20.04 (focal), then remove the temporary repository.
+        FOCAL_LIST="/etc/apt/sources.list.d/shrp-focal-python2.list"
+        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee "$FOCAL_LIST"
+
         sudo apt-get update
-        sudo apt-get install -y python2.7 python2.7-dev
-        sudo rm /etc/apt/sources.list.d/focal.list
+        sudo apt-get install -y --no-install-recommends python2.7 python2.7-minimal python2.7-dev
+
+        sudo rm -f "$FOCAL_LIST"
         sudo apt-get update
+
+        # Make both names available to old Android/SHRP build scripts.
         sudo update-alternatives --install /usr/bin/python2 python2 /usr/bin/python2.7 1
+
+        if [ ! -x /usr/bin/python2.7 ]; then
+          echo "::error::❌ /usr/bin/python2.7 was not installed"
+          exit 1
+        fi
+
+        if ! command -v python2.7 >/dev/null 2>&1; then
+          echo "::error::❌ python2.7 is not in PATH"
+          exit 1
+        fi
+
         python2.7 --version
-        echo "::notice::✅ Python 2.7 installed"
+        python2 --version
+
+        echo "::notice::✅ Python 2.7 installed and verified"
+
+    - name: 🧪 Verify SHRP 12.1 Python environment
+      if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::notice::🧪 Verifying Python 2.7 before SHRP sync/build..."
+        command -v python2.7
+        /usr/bin/python2.7 --version
+        command -v python2
+        python2 --version
+        test -x /usr/bin/python2.7
+        echo "::notice::✅ SHRP 12.1 Python environment is ready"
 
     - name: 📂 Install Git-Repo
       run: |
@@ -286,4 +323,3 @@ jobs:
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
         echo "::notice::✅ LDCheck complete"
       continue-on-error: true
-
