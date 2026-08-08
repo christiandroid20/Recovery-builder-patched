@@ -7,319 +7,1051 @@ on:
         description: 'SHRP Manifest'
         required: true
         default: 'https://github.com/SHRP-Reborn/manifest.git'
+
       MANIFEST_BRANCH:
         description: 'SHRP Manifest Branch'
         required: true
         default: 'shrp-12.1'
         type: choice
         options:
-        - shrp-12.1
-        - shrp-9.0
+          - shrp-12.1
+          - shrp-9.0
+
       BUILD_TARGET:
         description: 'Build Target(s) — separa varios con coma, ej: recovery,boot'
         required: true
         default: 'recovery'
+
       LDCHECK:
         description: 'Use LDCHECK'
         required: false
         default: 'false'
         type: boolean
+
       LDCHECKPATH:
-        description: 'Path of blobs to check' # Use it know what kind of dependencies your missing for decryption blobs.
+        description: 'Path of blobs to check'
         required: true
         default: 'system/bin/qseecomd'
 
 jobs:
+
+  # ================================================================
+  # PREPARE MATRIX
+  # ================================================================
+
   prepare-matrix:
     name: Prepare matrix (UI-friendly)
     runs-on: ubuntu-22.04
+
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+
     steps:
+
       - name: Build matrix JSON from input BUILD_TARGET
         id: set-matrix
         shell: bash
         run: |
           set -euo pipefail
+
           raw="${{ inputs.BUILD_TARGET }}"
+
           if [ -z "$raw" ]; then
             raw="recovery"
           fi
+
           IFS=',' read -ra arr <<< "$raw"
+
           json='['
           first=true
+
           for v in "${arr[@]}"; do
+
             v="$(echo "$v" | xargs)"
+
             if [ -z "$v" ]; then
               continue
             fi
+
             if [ "$first" = true ]; then
               json="$json\"$v\""
               first=false
             else
               json="$json,\"$v\""
             fi
+
           done
+
           json="$json]"
-          echo "matrix={\"target\":$json}" >> $GITHUB_OUTPUT
+
+          echo "matrix={\"target\":$json}" >> "$GITHUB_OUTPUT"
+
+
+  # ================================================================
+  # BUILD
+  # ================================================================
 
   build:
+
     name: 🛠️ Build ${{ matrix.target }} by ${{ github.actor }}
+
     needs: prepare-matrix
+
     runs-on: ubuntu-22.04
+
     if: github.event.repository.owner.id == github.event.sender.id
+
     strategy:
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
       fail-fast: false
+
     env:
+
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Tu device tree y tu fork del recovery core, ya incrustados
+
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
       DEVICE_TREE_BRANCH: shrp-12.1
+
       RECOVERY_CORE: https://github.com/christiandroid20/shrp_android_bootable_recovery.git
       RECOVERY_CORE_BRANCH: android-12.1
+
+      EXPECTED_VENDOR_SECURITY_PATCH: "2025-04-01"
+
     permissions:
       contents: write
+
     steps:
-    - name: Check Out
-      uses: actions/checkout@v4
 
-    - name: Display Inputs
-      run: |
-        echo "::notice::📋 Build Configuration"
-        echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree: ${{ env.DEVICE_TREE }} (${{ env.DEVICE_TREE_BRANCH }})"
-        echo "Build Target: ${{ matrix.target }}image"
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
 
-    - name: Cleanup
-      uses: rokibhasansagar/slimhub_actions@main
+      - name: Check Out
+        uses: actions/checkout@v4
 
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
 
-    - name: Check Manifest Branch
-      run: |
-        # SHRP 12.1 still requires Python 2.7 for parts of the legacy build
-        # tooling. Keep this explicitly enabled for the branch we are building.
-        if [ "${{ inputs.MANIFEST_BRANCH }}" = "shrp-12.1" ]; then
+      # ============================================================
+      # INPUTS
+      # ============================================================
+
+      - name: Display Inputs
+        run: |
+          echo "::notice::📋 Build Configuration"
+          echo "Manifest: ${{ inputs.MANIFEST }}"
+          echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
+          echo "Device Tree: ${{ env.DEVICE_TREE }}"
+          echo "Device Tree Branch: ${{ env.DEVICE_TREE_BRANCH }}"
+          echo "Recovery Core: ${{ env.RECOVERY_CORE }}"
+          echo "Recovery Core Branch: ${{ env.RECOVERY_CORE_BRANCH }}"
+          echo "Build Target: ${{ matrix.target }}image"
+
+
+      # ============================================================
+      # CLEAN RUNNER
+      # ============================================================
+
+      - name: Cleanup
+        uses: rokibhasansagar/slimhub_actions@main
+
+
+      # ============================================================
+      # SWAP
+      # ============================================================
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 12
+
+
+      # ============================================================
+      # BRANCH CHECK
+      # ============================================================
+
+      - name: Check Manifest Branch
+        run: |
+
+          if [ "${{ inputs.MANIFEST_BRANCH }}" = "shrp-12.1" ]; then
             echo "CHECK_LEGACY_BRANCH=true" >> "$GITHUB_ENV"
-        else
+          else
             echo "CHECK_LEGACY_BRANCH=false" >> "$GITHUB_ENV"
-        fi
+          fi
 
-    - name: 📦 Prepare the environment
-      run: |
-        echo "::notice::📦 Installing build dependencies..."
-        sudo apt update
-        sudo apt -y upgrade
 
-        # libtinfo5 / libncurses5(-dev) / lib32ncurses5-dev ya no están en
-        # los repos de Ubuntu 22.04 (jammy pasó a ncurses6). Se traen
-        # temporalmente del archivo de 20.04 (focal).
-        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
-        sudo apt update
-        sudo apt -y install libtinfo5 libncurses5 libncurses5-dev lib32ncurses5-dev
-        sudo rm /etc/apt/sources.list.d/focal.list
-        sudo apt update
+      # ============================================================
+      # DEPENDENCIES
+      # ============================================================
 
-        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
-          libc6-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev \
-          libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool \
-          libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool \
-          squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static \
-          libstdc++-10-dev libgflags-dev zip unzip flex bison gawk expat texinfo \
-          gpg gnupg2 python3-dev pkg-config libssl-dev gcc
-        echo "::notice::✅ Dependencies installed"
+      - name: 📦 Prepare the environment
+        shell: bash
+        run: |
 
-    - name: ☕ Install OpenJDK
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '8'
+          set -euo pipefail
 
-    - name: 🐍 Install Python 2.7 for SHRP 12.1
-      if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "::notice::🐍 Installing Python 2.7 for SHRP 12.1..."
+          echo "::notice::📦 Installing build dependencies..."
 
-        # Ubuntu 22.04 (jammy) no longer ships Python 2.7. SHRP 12.1
-        # still invokes /usr/bin/env python2.7, so install the 2.7 packages
-        # from Ubuntu 20.04 (focal), then remove the temporary repository.
-        FOCAL_LIST="/etc/apt/sources.list.d/shrp-focal-python2.list"
-        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee "$FOCAL_LIST"
+          sudo apt update
+          sudo apt -y upgrade
 
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends python2.7 python2.7-minimal python2.7-dev
+          echo "deb http://archive.ubuntu.com/ubuntu focal main universe" |
+            sudo tee /etc/apt/sources.list.d/focal.list
 
-        sudo rm -f "$FOCAL_LIST"
-        sudo apt-get update
+          sudo apt update
 
-        # Make both names available to old Android/SHRP build scripts.
-        sudo update-alternatives --install /usr/bin/python2 python2 /usr/bin/python2.7 1
+          sudo apt -y install \
+            libtinfo5 \
+            libncurses5 \
+            libncurses5-dev \
+            lib32ncurses5-dev
 
-        if [ ! -x /usr/bin/python2.7 ]; then
-          echo "::error::❌ /usr/bin/python2.7 was not installed"
-          exit 1
-        fi
+          sudo rm -f /etc/apt/sources.list.d/focal.list
 
-        if ! command -v python2.7 >/dev/null 2>&1; then
-          echo "::error::❌ python2.7 is not in PATH"
-          exit 1
-        fi
+          sudo apt update
 
-        python2.7 --version
-        python2 --version
+          sudo apt -y install \
+            gperf \
+            gcc-multilib \
+            gcc-10-multilib \
+            g++-multilib \
+            g++-10-multilib \
+            libc6-dev \
+            x11proto-core-dev \
+            libx11-dev \
+            tree \
+            lib32z-dev \
+            libgl1-mesa-dev \
+            libxml2-utils \
+            xsltproc \
+            bc \
+            ccache \
+            lib32readline-dev \
+            lib32z1-dev \
+            liblz4-tool \
+            libsdl1.2-dev \
+            libwxgtk3.0-gtk3-dev \
+            libxml2 \
+            lzop \
+            pngcrush \
+            schedtool \
+            squashfs-tools \
+            imagemagick \
+            libbz2-dev \
+            lzma \
+            ncftp \
+            qemu-user-static \
+            libstdc++-10-dev \
+            libgflags-dev \
+            zip \
+            unzip \
+            flex \
+            bison \
+            gawk \
+            expat \
+            texinfo \
+            gpg \
+            gnupg2 \
+            python3-dev \
+            pkg-config \
+            libssl-dev \
+            gcc
 
-        echo "::notice::✅ Python 2.7 installed and verified"
+          echo "::notice::✅ Dependencies installed"
 
-    - name: 🧪 Verify SHRP 12.1 Python environment
-      if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "::notice::🧪 Verifying Python 2.7 before SHRP sync/build..."
-        command -v python2.7
-        /usr/bin/python2.7 --version
-        command -v python2
-        python2 --version
-        test -x /usr/bin/python2.7
-        echo "::notice::✅ SHRP 12.1 Python environment is ready"
 
-    - name: 📂 Install Git-Repo
-      run: |
-        echo "::notice::📂 Installing git-repo tool..."
-        mkdir ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        sudo ln -sf ~/bin/repo /usr/bin/repo
-        echo "::notice::✅ Git-repo installed"
+      # ============================================================
+      # JAVA
+      # ============================================================
 
-    - name: 🔧 Initialize Repo
-      run: |
-        echo "::notice::🔧 Initializing repository..."
-        mkdir android-recovery
-        cd android-recovery
-        git config --global user.name "lazycodebuilder"
-        git config --global user.email "154446636+lazycodebuilder@users.noreply.github.com"
-        repo init --depth=1 -u ${{ inputs.MANIFEST }} -b ${{ inputs.MANIFEST_BRANCH }}
-        echo "::notice::✅ Repository initialized"
+      - name: ☕ Install OpenJDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '8'
 
-    - name: 🔄 Repo Sync
-      run: |
-        echo "::warning::🔄 Syncing repositories (this may take a while)..."
-        cd android-recovery
-        repo sync -j4 --force-sync --no-clone-bundle --current-branch
-        echo "::notice::✅ Repository sync complete"
 
-    - name: 🔄 Clone Recovery & Device Tree
-      run: |
-        echo "::notice::🔄 Cloning recovery and device tree..."
-        cd android-recovery
-        rm -rf bootable/recovery
-        git clone --branch ${{ env.RECOVERY_CORE_BRANCH }} --depth 1 ${{ env.RECOVERY_CORE }} bootable/recovery
-        git clone ${{ env.DEVICE_TREE }} -b ${{ env.DEVICE_TREE_BRANCH }} ./device_tree
-        cd device_tree
-        echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        echo "::notice::✅ Recovery fork and device tree cloned"
+      # ============================================================
+      # PYTHON 2.7
+      # ============================================================
 
-    - name: 🔍 Extract Configuration
-      run: |
-        echo "::notice::🔍 Extracting device configuration..."
-        cd android-recovery/device_tree
+      - name: 🐍 Install Python 2.7 for SHRP 12.1
+        if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+        shell: bash
+        run: |
 
-        DEVICE_MAKEFILE=""
-        DEVICE_DIRECTORY=""
-        DEVICE_NAME=""
+          set -euo pipefail
 
-        for file in *.mk; do
-            makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-            brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
-            codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+          echo "::notice::🐍 Installing Python 2.7..."
+
+          FOCAL_LIST="/etc/apt/sources.list.d/shrp-focal-python2.list"
+
+          echo "deb http://archive.ubuntu.com/ubuntu focal main universe" |
+            sudo tee "$FOCAL_LIST"
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            --no-install-recommends \
+            python2.7 \
+            python2.7-minimal \
+            python2.7-dev
+
+          sudo rm -f "$FOCAL_LIST"
+
+          sudo apt-get update
+
+          sudo update-alternatives \
+            --install /usr/bin/python2 python2 /usr/bin/python2.7 1
+
+          test -x /usr/bin/python2.7
+
+          command -v python2.7
+          command -v python2
+
+          python2.7 --version
+          python2 --version
+
+          echo "::notice::✅ Python 2.7 installed"
+
+
+      # ============================================================
+      # VERIFY PYTHON
+      # ============================================================
+
+      - name: 🧪 Verify SHRP 12.1 Python environment
+        if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          command -v python2.7
+          command -v python2
+
+          /usr/bin/python2.7 --version
+          python2 --version
+
+          test -x /usr/bin/python2.7
+
+          echo "::notice::✅ Python 2.7 environment ready"
+
+
+      # ============================================================
+      # REPO
+      # ============================================================
+
+      - name: 📂 Install Git-Repo
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          mkdir -p "$HOME/bin"
+
+          curl -L \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+
+          chmod +x "$HOME/bin/repo"
+
+          sudo ln -sf "$HOME/bin/repo" /usr/bin/repo
+
+          repo --version
+
+          echo "::notice::✅ Git-repo installed"
+
+
+      # ============================================================
+      # INIT REPO
+      # ============================================================
+
+      - name: 🔧 Initialize Repo
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          mkdir -p android-recovery
+
+          cd android-recovery
+
+          git config --global user.name "lazycodebuilder"
+          git config --global user.email "154446636+lazycodebuilder@users.noreply.github.com"
+
+          repo init \
+            --depth=1 \
+            -u "${{ inputs.MANIFEST }}" \
+            -b "${{ inputs.MANIFEST_BRANCH }}"
+
+          echo "::notice::✅ Repository initialized"
+
+
+      # ============================================================
+      # SYNC
+      # ============================================================
+
+      - name: 🔄 Repo Sync
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "::warning::🔄 Syncing SHRP repositories..."
+
+          repo sync \
+            -j"$(nproc)" \
+            --force-sync \
+            --no-clone-bundle \
+            --current-branch \
+            --optimized-fetch \
+            --prune
+
+          echo "::notice::✅ Repository sync complete"
+
+
+      # ============================================================
+      # CLONE DEVICE TREE / RECOVERY CORE
+      # ============================================================
+
+      - name: 🔄 Clone Recovery & Device Tree
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "::notice::🔄 Installing recovery core..."
+
+          rm -rf bootable/recovery
+
+          git clone \
+            --branch "${{ env.RECOVERY_CORE_BRANCH }}" \
+            --depth 1 \
+            "${{ env.RECOVERY_CORE }}" \
+            bootable/recovery
+
+          echo "::notice::🔄 Cloning A35x device tree..."
+
+          git clone \
+            --branch "${{ env.DEVICE_TREE_BRANCH }}" \
+            --depth 1 \
+            "${{ env.DEVICE_TREE }}" \
+            ./device_tree
+
+          cd device_tree
+
+          COMMIT_ID="$(git rev-parse HEAD)"
+
+          echo "COMMIT_ID=$COMMIT_ID" >> "$GITHUB_ENV"
+
+          cd ..
+
+          echo "::notice::Recovery core and device tree cloned"
+
+
+      # ============================================================
+      # EXTRACT DEVICE CONFIGURATION
+      # ============================================================
+
+      - name: 🔍 Extract Configuration
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery/device_tree
+
+          DEVICE_MAKEFILE=""
+          DEVICE_DIRECTORY=""
+          DEVICE_NAME=""
+
+          shopt -s nullglob
+
+          for file in *.mk; do
+
+            makefile="$(
+              sed -n \
+                's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' \
+                "$file" |
+                head -n1
+            )"
+
+            brand="$(
+              sed -n \
+                's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' \
+                "$file" |
+                head -n1
+            )"
+
+            codename="$(
+              sed -n \
+                's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' \
+                "$file" |
+                head -n1
+            )"
+
             if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
-                DEVICE_MAKEFILE="$makefile"
-                DEVICE_DIRECTORY="device/$brand"
-                DEVICE_NAME="$codename"
-                echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> $GITHUB_ENV
-                echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-                echo "DEVICE_DIRECTORY=${DEVICE_DIRECTORY}" >> $GITHUB_ENV
-                break
+
+              DEVICE_MAKEFILE="$makefile"
+              DEVICE_DIRECTORY="device/$brand"
+              DEVICE_NAME="$codename"
+
+              echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE" >> "$GITHUB_ENV"
+              echo "DEVICE_NAME=$DEVICE_NAME" >> "$GITHUB_ENV"
+              echo "DEVICE_DIRECTORY=$DEVICE_DIRECTORY" >> "$GITHUB_ENV"
+
+              break
+
             fi
-        done
 
-        cd ../
-        mkdir -p "$DEVICE_DIRECTORY"
-        mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
-        echo "::notice::✅ Device configuration extracted: $DEVICE_NAME"
+          done
 
-    - name: 🍽️ Setup Lunch
-      run: |
-        echo "::notice::🍽️ Setting up build environment..."
-        cd android-recovery
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        echo "::notice::🍽️ Running lunch: ${{ env.DEVICE_MAKEFILE }}-eng..."
-        lunch ${{ env.DEVICE_MAKEFILE }}-eng
-        echo "::notice::✅ Lunch configured"
+          if [ -z "$DEVICE_MAKEFILE" ]; then
+            echo "::error::❌ Could not detect PRODUCT_NAME"
+            exit 1
+          fi
 
-    - name: 🔨 Building ${{ matrix.target }}.img
-      run: |
-        echo "::warning::🔨 Building ${{ matrix.target }}.img (this will take ~45-60 minutes)..."
-        cd android-recovery
-        source build/envsetup.sh
-        lunch ${{ env.DEVICE_MAKEFILE }}-eng
-        START_TIME=$(date +%s)
-        mka ${{ matrix.target }}image -j$(nproc --all)
-        BUILD_STATUS=$?
-        END_TIME=$(date +%s)
-        BUILD_TIME=$((END_TIME - START_TIME))
+          cd ..
 
-        if [ $BUILD_STATUS -eq 0 ]; then
-          echo "::notice::✅ Build completed in $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
-        else
-          echo "::error::❌ Build failed with exit code: $BUILD_STATUS"
-          exit $BUILD_STATUS
-        fi
+          mkdir -p "$DEVICE_DIRECTORY"
 
-    - name: 📋 Set Build Metadata
-      run: |
-        echo "::notice::📋 Configuring build metadata..."
-        if [ ${{ matrix.target }} == 'recovery' ]; then
-           echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
-        elif [ ${{ matrix.target }} == 'boot' ]; then
-           echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
-        else
-           echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
-        fi
-        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-        echo "::notice::✅ Metadata configured"
+          mv device_tree "$DEVICE_DIRECTORY/$DEVICE_NAME"
 
-    - name: 📤 Upload to Release
-      uses: softprops/action-gh-release@master
-      with:
-        files: |
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/SHRP*.zip
-          android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
-        name: Unofficial SHRP For ${{ env.DEVICE_NAME }} — ${{ matrix.target }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}-${{ matrix.target }}
-        body: |
-          Build: ${{ inputs.MANIFEST_BRANCH }}
-          Target: ${{ matrix.target }}
-          Device: [Device Tree/Branch](${{ env.DEVICE_TREE }}/tree/${{ env.DEVICE_TREE_BRANCH }})
-          Commit: Most recent [commit](${{ env.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
+          echo "::notice::✅ Device configuration extracted"
+          echo "Device: $DEVICE_NAME"
+          echo "Makefile: $DEVICE_MAKEFILE"
+          echo "Directory: $DEVICE_DIRECTORY"
 
-    - name: 🧪 Run LDCheck
-      if: inputs.LDCHECK == 'true'
-      run: |
-        echo "::notice::🧪 Running LDCheck analysis..."
-        cd tools
-        mv -n libneeds ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
-        mv -n ldcheck ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
-        cd ../android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root
-        python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
-        echo "::notice::✅ LDCheck complete"
-      continue-on-error: true
+
+      # ============================================================
+      # SHOW DEVICE TREE
+      # ============================================================
+
+      - name: 🔎 Inspect A35x configuration
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "=========================================="
+          echo " DEVICE TREE"
+          echo "=========================================="
+
+          echo "DEVICE_NAME=$DEVICE_NAME"
+          echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE"
+          echo "DEVICE_DIRECTORY=$DEVICE_DIRECTORY"
+
+          echo ""
+          echo "BoardConfig:"
+          find "device/$DEVICE_NAME" \
+            -name "BoardConfig*.mk" \
+            -print 2>/dev/null || true
+
+          echo ""
+          echo "vendor.prop:"
+          find "device" \
+            -path "*$DEVICE_NAME*" \
+            -name "vendor.prop" \
+            -print 2>/dev/null || true
+
+
+      # ============================================================
+      # SYS PROP DIAGNOSTIC
+      # ============================================================
+
+      - name: 🔍 Detect duplicate sysprop assignments
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "=========================================="
+          echo " SYS PROP DIAGNOSTIC"
+          echo "=========================================="
+
+          echo ""
+          echo "Searching for:"
+          echo "ro.vendor.build.security_patch"
+
+          echo ""
+
+          grep -Rns \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            --exclude-dir=.repo \
+            "ro.vendor.build.security_patch" \
+            device \
+            vendor \
+            build \
+            system \
+            2>/dev/null || true
+
+
+      # ============================================================
+      # AUTO FIX ONLY EMPTY ASSIGNMENTS
+      # ============================================================
+
+      - name: 🛠️ Auto-fix empty security patch properties
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "=========================================="
+          echo " SAFE SYS PROP AUTO-FIX"
+          echo "=========================================="
+
+          FOUND=0
+
+          while IFS= read -r -d '' file; do
+
+            if grep -qE \
+              '^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=[[:space:]]*$' \
+              "$file"; then
+
+              echo "::warning::Empty property found: $file"
+
+              grep -nE \
+                'ro\.vendor\.build\.security_patch[[:space:]]*=' \
+                "$file" || true
+
+              sed -i \
+                '/^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=[[:space:]]*$/d' \
+                "$file"
+
+              FOUND=1
+
+              echo "::notice::Removed empty assignment from $file"
+
+            fi
+
+          done < <(
+            find \
+              device \
+              vendor \
+              -type f \
+              \( \
+                -name "*.prop" \
+                -o -name "*.mk" \
+                -o -name "*.bp" \
+                -o -name "Makefile" \
+              \) \
+              -print0 \
+              2>/dev/null
+          )
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No empty vendor security patch assignment found."
+          fi
+
+
+      # ============================================================
+      # VALIDATE VENDOR.PROP
+      # ============================================================
+
+      - name: 🔐 Validate A35x vendor.prop
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          VENDOR_PROP="$(find device -path "*$DEVICE_NAME*" -name vendor.prop -print -quit)"
+
+          if [ -z "$VENDOR_PROP" ]; then
+            echo "::warning::vendor.prop not found"
+            exit 0
+          fi
+
+          echo "Using:"
+          echo "$VENDOR_PROP"
+
+          echo ""
+          echo "Security properties:"
+
+          grep -n \
+            "security_patch" \
+            "$VENDOR_PROP" || true
+
+          echo ""
+
+          if grep -q \
+            "^ro\.vendor\.build\.security_patch=${EXPECTED_VENDOR_SECURITY_PATCH}$" \
+            "$VENDOR_PROP"; then
+
+            echo "::notice::✅ vendor security patch is ${EXPECTED_VENDOR_SECURITY_PATCH}"
+
+          else
+
+            echo "::warning::Expected vendor security patch not found."
+
+          fi
+
+
+      # ============================================================
+      # SYS PROP UNIQUE CHECK
+      # ============================================================
+
+      - name: 🧪 Validate security patch uniqueness
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "=========================================="
+          echo " FINAL SOURCE PROPERTY CHECK"
+          echo "=========================================="
+
+          mapfile -t DEFINITIONS < <(
+            grep -Rhs \
+              --exclude-dir=.git \
+              --exclude-dir=.repo \
+              --exclude-dir=out \
+              "^ro\.vendor\.build\.security_patch[[:space:]]*=" \
+              device \
+              vendor \
+              2>/dev/null |
+            sort -u
+          )
+
+          echo "Unique definitions:"
+
+          printf '%s\n' "${DEFINITIONS[@]}"
+
+          echo ""
+
+          NONEMPTY_COUNT=0
+
+          for prop in "${DEFINITIONS[@]}"; do
+
+            if [[ "$prop" =~ ^ro\.vendor\.build\.security_patch[[:space:]]*=[[:space:]]*$ ]]; then
+              continue
+            fi
+
+            NONEMPTY_COUNT=$((NONEMPTY_COUNT + 1))
+
+          done
+
+          echo "Non-empty definitions: $NONEMPTY_COUNT"
+
+          if [ "$NONEMPTY_COUNT" -gt 1 ]; then
+
+            echo "::error::❌ Multiple non-empty vendor security patch definitions detected!"
+
+            grep -Rns \
+              --exclude-dir=.git \
+              --exclude-dir=.repo \
+              --exclude-dir=out \
+              "ro.vendor.build.security_patch" \
+              device \
+              vendor \
+              2>/dev/null || true
+
+            exit 1
+
+          fi
+
+          echo "::notice::✅ Source sysprop validation passed."
+
+
+      # ============================================================
+      # CLEAN OUT
+      # ============================================================
+
+      - name: 🧹 Clean recovery output
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          echo "::notice::🧹 Cleaning previous recovery output..."
+
+          rm -rf out
+
+          echo "::notice::✅ out/ removed"
+
+
+      # ============================================================
+      # LUNCH
+      # ============================================================
+
+      - name: 🍽️ Setup Lunch
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          source build/envsetup.sh
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+
+          echo "::notice::🍽️ Running lunch: ${DEVICE_MAKEFILE}-eng"
+
+          lunch "${DEVICE_MAKEFILE}-eng"
+
+          echo "::notice::✅ Lunch configured"
+
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: 🔨 Building ${{ matrix.target }}.img
+        shell: bash
+        run: |
+
+          set -o pipefail
+
+          cd android-recovery
+
+          source build/envsetup.sh
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+
+          lunch "${DEVICE_MAKEFILE}-eng"
+
+          echo ""
+          echo "=========================================="
+          echo " BUILD"
+          echo "=========================================="
+
+          echo "Target: ${{ matrix.target }}image"
+          echo "Device: ${DEVICE_NAME}"
+
+          START_TIME=$(date +%s)
+
+          set +e
+
+          mka "${{ matrix.target }}image" -j"$(nproc --all)" 2>&1 |
+            tee "${GITHUB_WORKSPACE}/shrp-build.log"
+
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          set -e
+
+          END_TIME=$(date +%s)
+
+          BUILD_TIME=$((END_TIME - START_TIME))
+
+          if [ "$BUILD_STATUS" -eq 0 ]; then
+
+            echo "::notice::✅ Build completed in $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
+
+          else
+
+            echo "::error::❌ Build failed with exit code $BUILD_STATUS"
+
+            exit "$BUILD_STATUS"
+
+          fi
+
+
+      # ============================================================
+      # POST BUILD SYS PROP CHECK
+      # ============================================================
+
+      - name: 🔎 Inspect generated build properties
+        if: always()
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          cd android-recovery
+
+          PRODUCT_DIR="out/target/product/${DEVICE_NAME}"
+
+          echo "=========================================="
+          echo " GENERATED PROPERTIES"
+          echo "=========================================="
+
+          if [ -d "$PRODUCT_DIR" ]; then
+
+            echo ""
+            echo "Searching generated files..."
+
+            grep -Rns \
+              --include="build.prop" \
+              --include="*.prop" \
+              "ro.vendor.build.security_patch" \
+              "$PRODUCT_DIR" \
+              2>/dev/null || true
+
+          else
+
+            echo "::warning::Product output directory does not exist."
+
+          fi
+
+
+      # ============================================================
+      # ERROR DIAGNOSTICS
+      # ============================================================
+
+      - name: 🩺 Collect build diagnostics
+        if: failure()
+        shell: bash
+        run: |
+
+          set +e
+
+          cd android-recovery
+
+          echo "=========================================="
+          echo " BUILD FAILURE DIAGNOSTICS"
+          echo "=========================================="
+
+          echo ""
+          echo "Last lines of build log:"
+
+          tail -n 200 \
+            "${GITHUB_WORKSPACE}/shrp-build.log" \
+            2>/dev/null || true
+
+          echo ""
+          echo "Security patch references in source:"
+
+          grep -Rns \
+            --exclude-dir=.git \
+            --exclude-dir=.repo \
+            --exclude-dir=out \
+            "ro.vendor.build.security_patch" \
+            device \
+            vendor \
+            build \
+            system \
+            2>/dev/null || true
+
+          echo ""
+          echo "Generated vendor build.prop:"
+
+          if [ -f "out/target/product/${DEVICE_NAME}/vendor/build.prop" ]; then
+
+            grep -n \
+              "security_patch" \
+              "out/target/product/${DEVICE_NAME}/vendor/build.prop" \
+              || true
+
+          fi
+
+
+      # ============================================================
+      # BUILD METADATA
+      # ============================================================
+
+      - name: 📋 Set Build Metadata
+        if: success()
+        shell: bash
+        run: |
+
+          if [ "${{ matrix.target }}" = "recovery" ]; then
+
+            echo "BUILD_TARGET_NAME=recovery" >> "$GITHUB_ENV"
+
+          elif [ "${{ matrix.target }}" = "boot" ]; then
+
+            echo "BUILD_TARGET_NAME=boot" >> "$GITHUB_ENV"
+
+          else
+
+            echo "BUILD_TARGET_NAME=vendor_boot" >> "$GITHUB_ENV"
+
+          fi
+
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> "$GITHUB_ENV"
+
+          echo "::notice::✅ Metadata configured"
+
+
+      # ============================================================
+      # RELEASE
+      # ============================================================
+
+      - name: 📤 Upload to Release
+        if: success()
+        uses: softprops/action-gh-release@master
+        with:
+
+          files: |
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/SHRP*.zip
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
+
+          name: Unofficial SHRP For ${{ env.DEVICE_NAME }} — ${{ matrix.target }} // ${{ env.BUILD_DATE }}
+
+          tag_name: ${{ github.run_id }}-${{ matrix.target }}
+
+          body: |
+            Build: ${{ inputs.MANIFEST_BRANCH }}
+            Target: ${{ matrix.target }}
+            Device: ${{ env.DEVICE_NAME }}
+
+            Device Tree:
+            ${{ env.DEVICE_TREE }}/tree/${{ env.DEVICE_TREE_BRANCH }}
+
+            Device Tree Commit:
+            ${{ env.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}
+
+
+      # ============================================================
+      # LDCHECK
+      # ============================================================
+
+      - name: 🧪 Run LDCheck
+        if: inputs.LDCHECK == 'true' && success()
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          echo "::notice::🧪 Running LDCheck analysis..."
+
+          cd tools
+
+          mv -n \
+            libneeds \
+            "${GITHUB_WORKSPACE}/android-recovery/out/target/product/${DEVICE_NAME}/recovery/root/"
+
+          mv -n \
+            ldcheck \
+            "${GITHUB_WORKSPACE}/android-recovery/out/target/product/${DEVICE_NAME}/recovery/root/"
+
+          cd \
+            "${GITHUB_WORKSPACE}/android-recovery/out/target/product/${DEVICE_NAME}/recovery/root"
+
+          python3 ldcheck \
+            -p system/lib64:vendor/lib64:system/lib:vendor/lib \
+            -d "${{ inputs.LDCHECKPATH }}"
+
+          echo "::notice::✅ LDCheck complete"
+
+        continue-on-error: true
+
+
+      # ============================================================
+      # UPLOAD LOG
+      # ============================================================
+
+      - name: 📤 Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shrp-build-log-${{ matrix.target }}
+          path: |
+            shrp-build.log
+          if-no-files-found: warn
