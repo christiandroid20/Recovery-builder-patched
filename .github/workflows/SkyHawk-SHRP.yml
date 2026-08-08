@@ -54,7 +54,7 @@ jobs:
       
     - name: Display Inputs
       run: |
-        echo "Displaying variables/inputs."
+        echo "::notice::📋 Build Configuration"
         echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
         echo "Device Tree: ${{ env.DEVICE_TREE }} (${{ env.DEVICE_TREE_BRANCH }})"
         echo "Build Target: ${{ inputs.BUILD_TARGET }}image"
@@ -77,11 +77,11 @@ jobs:
 
     - name: 📦 Prepare the environment
       run: |
-        echo "::group::Installing dependencies..."
+        echo "::notice::📦 Installing build dependencies..."
         sudo apt update
         sudo apt -y upgrade
         sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc liblz4-tool imagemagick gpg gnupg2 flex bison gawk expat texinfo python3-dev libgcc1 gcc pkg-config libssl-dev
-        echo "::endgroup::"
+        echo "::notice::✅ Dependencies installed"
 
     - name: ☕ Install OpenJDK
       uses: actions/setup-java@v4
@@ -89,59 +89,56 @@ jobs:
         distribution: 'zulu'
         java-version: '8'
 
-    - name: 🐍 Install Python 2.7 and dependencies
+    - name: 🐍 Install Python 2.7
       run: |
-        echo "::group::Installing Python 2.7..."
+        echo "::notice::🐍 Installing Python 2.7..."
         sudo apt-get update
         sudo apt-get install -y python2.7 python2-dev
         sudo update-alternatives --install /usr/bin/python2 python2 /usr/bin/python2.7 1
         python2.7 --version
-        echo "::endgroup::"
+        echo "::notice::✅ Python 2.7 installed"
         
     - name: 📂 Install Git-Repo
       run: |
-        echo "::group::Installing git-repo tool..."
+        echo "::notice::📂 Installing git-repo tool..."
         mkdir ~/bin
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-        echo "::endgroup::"
+        echo "::notice::✅ Git-repo installed"
 
     - name: 🔧 Initialize Repo
       run: |
-        echo "::group::Initializing repository..."
+        echo "::notice::🔧 Initializing repository..."
         mkdir android-recovery
         cd android-recovery
         git config --global user.name "lazycodebuilder"
         git config --global user.email "154446636+lazycodebuilder@users.noreply.github.com"
         repo init --depth=1 -u ${{ inputs.MANIFEST }} -b ${{ inputs.MANIFEST_BRANCH }}
-        echo "::endgroup::"
+        echo "::notice::✅ Repository initialized"
 
     - name: 🔄 Repo Sync
       run: |
+        echo "::warning::🔄 Syncing repositories (this may take a while)..."
         cd android-recovery
-        echo "::group::Syncing repositories..."
         repo sync -j4 --force-sync --no-clone-bundle --current-branch
-        echo "::endgroup::"
+        echo "::notice::✅ Repository sync complete"
 
     - name: 🔄 Clone Recovery & Device Tree
       run: |
+        echo "::notice::🔄 Cloning recovery and device tree..."
         cd android-recovery
-        echo "::group::Replacing bootable/recovery..."
         rm -rf bootable/recovery
         git clone --branch ${{ env.RECOVERY_CORE_BRANCH }} --depth 1 ${{ env.RECOVERY_CORE }} bootable/recovery
-        echo "::endgroup::"
-        
-        echo "::group::Cloning device tree..."
         git clone ${{ env.DEVICE_TREE }} -b ${{ env.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        echo "::endgroup::"
+        echo "::notice::✅ Recovery fork and device tree cloned"
 
     - name: 🔍 Extract Configuration
       run: |
+        echo "::notice::🔍 Extracting device configuration..."
         cd android-recovery/device_tree
-        echo "::group::Extracting device configuration..."
         
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
@@ -163,27 +160,26 @@ jobs:
         done
         
         cd ../
-        echo "Setting up device directory: $DEVICE_DIRECTORY"
         mkdir -p "$DEVICE_DIRECTORY"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
-        echo "::endgroup::"
+        echo "::notice::✅ Device configuration extracted: $DEVICE_NAME"
 
     - name: 🍽️ Setup Lunch
       run: |
+        echo "::notice::🍽️ Setting up build environment..."
         cd android-recovery
-        echo "::group::Setting up build environment..."
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        echo "::endgroup::"
-        
-        echo "::group::Running lunch: ${{ env.DEVICE_MAKEFILE }}-eng..."
+        echo "::notice::🍽️ Running lunch: ${{ env.DEVICE_MAKEFILE }}-eng..."
         lunch ${{ env.DEVICE_MAKEFILE }}-eng
-        echo "::endgroup::"
+        echo "::notice::✅ Lunch configured"
 
     - name: 🔨 Building ${{ inputs.BUILD_TARGET }}.img
       run: |
+        echo "::warning::🔨 Building ${{ inputs.BUILD_TARGET }}.img (this will take ~45-60 minutes)..."
         cd android-recovery
-        echo "::group::Starting build process..."
+        source build/envsetup.sh
+        lunch ${{ env.DEVICE_MAKEFILE }}-eng
         START_TIME=$(date +%s)
         mka ${{ inputs.BUILD_TARGET }}image -j16
         BUILD_STATUS=$?
@@ -191,16 +187,15 @@ jobs:
         BUILD_TIME=$((END_TIME - START_TIME))
         
         if [ $BUILD_STATUS -eq 0 ]; then
-          echo "Build completed in $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
+          echo "::notice::✅ Build completed in $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
         else
-          echo "Build failed with exit code: $BUILD_STATUS"
+          echo "::error::❌ Build failed with exit code: $BUILD_STATUS"
           exit $BUILD_STATUS
         fi
-        echo "::endgroup::"
 
     - name: 📋 Set Build Metadata
       run: |
-        echo "::group::Configuring metadata..."
+        echo "::notice::📋 Configuring build metadata..."
         if [ ${{ inputs.BUILD_TARGET }} == 'recovery' ]; then
            echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
         elif [ ${{ inputs.BUILD_TARGET }} == 'boot' ]; then
@@ -209,7 +204,7 @@ jobs:
            echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
         fi
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-        echo "::endgroup::"
+        echo "::notice::✅ Metadata configured"
 
     - name: 📤 Upload to Release
       uses: softprops/action-gh-release@master
@@ -228,11 +223,11 @@ jobs:
     - name: 🧪 Run LDCheck
       if: inputs.LDCHECK == 'true'
       run: |
-        echo "::group::Running LDCheck analysis..."
+        echo "::notice::🧪 Running LDCheck analysis..."
         cd tools
         mv -n libneeds ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
         mv -n ldcheck ${GITHUB_WORKSPACE}/android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/
         cd ../android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
-        echo "::endgroup::"
+        echo "::notice::✅ LDCheck complete"
       continue-on-error: true
