@@ -79,7 +79,16 @@ jobs:
       run: |
         sudo apt update
         sudo apt -y upgrade
-        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libtinfo5 libgflags-dev libncurses5 python3
+        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc liblz4-tool imagemagick gpg gnupg2 flex bison gawk expat texinfo python3-dev libgcc1 gcc pkg-config libssl-dev
+
+    - name: Install Python 2.7 and dependencies
+      run: |
+        echo "::group::Installing Python 2.7..."
+        sudo apt-get update
+        sudo apt-get install -y python2.7 python2-dev
+        sudo update-alternatives --install /usr/bin/python2 python2 /usr/bin/python2.7 1
+        echo "Python 2.7 installation completed"
+        echo "::endgroup::"
 
     - name: Install OpenJDK
       uses: actions/setup-java@v4
@@ -162,13 +171,6 @@ jobs:
         # Move device_tree folder to device_directory and rename it to $DEVICE_NAME
         echo "Moving device_tree to $DEVICE_DIRECTORY/$DEVICE_NAME"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
-        echo "::endgroup::"
-
-    - name: Installing python2 for legacy builds
-      if: env.CHECK_LEGACY_BRANCH == 'true'
-      run: |
-        echo "::group::Installing Python2..."
-        sudo apt-get install python2 python-is-python2
         echo "::endgroup::"
 
     - name: Building SkyHawk
