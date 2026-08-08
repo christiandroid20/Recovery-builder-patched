@@ -16,14 +16,9 @@ on:
         - shrp-12.1
         - shrp-9.0
       BUILD_TARGET:
-        description: 'Specify your Build Target' # Pick among boot, recovery and vendor_boot
+        description: 'Build Target(s) — separa varios con coma, ej: recovery,boot'
         required: true
         default: 'recovery'
-        type: choice
-        options:
-        - boot
-        - recovery
-        - vendorboot
       LDCHECK:
         description: 'Use LDCHECK'
         required: false
@@ -35,13 +30,50 @@ on:
         default: 'system/bin/qseecomd'
 
 jobs:
+  prepare-matrix:
+    name: Prepare matrix (UI-friendly)
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build matrix JSON from input BUILD_TARGET
+        id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${{ inputs.BUILD_TARGET }}"
+          if [ -z "$raw" ]; then
+            raw="recovery"
+          fi
+          IFS=',' read -ra arr <<< "$raw"
+          json='['
+          first=true
+          for v in "${arr[@]}"; do
+            v="$(echo "$v" | xargs)"
+            if [ -z "$v" ]; then
+              continue
+            fi
+            if [ "$first" = true ]; then
+              json="$json\"$v\""
+              first=false
+            else
+              json="$json,\"$v\""
+            fi
+          done
+          json="$json]"
+          echo "matrix={\"target\":$json}" >> $GITHUB_OUTPUT
+
   build:
-    name: Build SHRP by ${{ github.actor }}
+    name: 🛠️ Build ${{ matrix.target }} by ${{ github.actor }}
+    needs: prepare-matrix
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+      fail-fast: false
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Tu device tree y tu fork del recovery core, ya incrustados (antes eran inputs)
+      # Tu device tree y tu fork del recovery core, ya incrustados
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
       DEVICE_TREE_BRANCH: shrp-12.1
       RECOVERY_CORE: https://github.com/christiandroid20/shrp_android_bootable_recovery.git
@@ -51,17 +83,17 @@ jobs:
     steps:
     - name: Check Out
       uses: actions/checkout@v4
-      
+
     - name: Display Inputs
       run: |
         echo "::notice::📋 Build Configuration"
         echo "Manifest Branch: ${{ inputs.MANIFEST_BRANCH }}"
         echo "Device Tree: ${{ env.DEVICE_TREE }} (${{ env.DEVICE_TREE_BRANCH }})"
-        echo "Build Target: ${{ inputs.BUILD_TARGET }}image"
+        echo "Build Target: ${{ matrix.target }}image"
 
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
-      
+
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
@@ -80,7 +112,23 @@ jobs:
         echo "::notice::📦 Installing build dependencies..."
         sudo apt update
         sudo apt -y upgrade
-        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev lib32ncurses5-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc liblz4-tool imagemagick gpg gnupg2 flex bison gawk expat texinfo python3-dev libgcc1 gcc pkg-config libssl-dev
+
+        # libtinfo5 / libncurses5(-dev) / lib32ncurses5-dev ya no están en
+        # los repos de Ubuntu 22.04 (jammy pasó a ncurses6). Se traen
+        # temporalmente del archivo de 20.04 (focal).
+        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
+        sudo apt update
+        sudo apt -y install libtinfo5 libncurses5 libncurses5-dev lib32ncurses5-dev
+        sudo rm /etc/apt/sources.list.d/focal.list
+        sudo apt update
+
+        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
+          libc6-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev \
+          libxml2-utils xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool \
+          libsdl1.2-dev libwxgtk3.0-gtk3-dev libxml2 lzop pngcrush schedtool \
+          squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static \
+          libstdc++-10-dev libgflags-dev zip unzip flex bison gawk expat texinfo \
+          gpg gnupg2 python3-dev pkg-config libssl-dev gcc
         echo "::notice::✅ Dependencies installed"
 
     - name: ☕ Install OpenJDK
@@ -89,15 +137,21 @@ jobs:
         distribution: 'zulu'
         java-version: '8'
 
-    - name: 🐍 Install Python 2.7
+    - name: 🐍 Install Python 2.7 (solo ramas legacy)
+      if: env.CHECK_LEGACY_BRANCH == 'true'
       run: |
-        echo "::notice::🐍 Installing Python 2.7..."
+        echo "::notice::🐍 Installing Python 2.7 (rama legacy)..."
+        # jammy no trae paquetes de python2 en ningún repo; se sacan del
+        # archivo de 20.04 (focal), igual que ncurses5 arriba.
+        echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
         sudo apt-get update
-        sudo apt-get install -y python2.7 python2-dev
+        sudo apt-get install -y python2.7 python2.7-dev
+        sudo rm /etc/apt/sources.list.d/focal.list
+        sudo apt-get update
         sudo update-alternatives --install /usr/bin/python2 python2 /usr/bin/python2.7 1
         python2.7 --version
         echo "::notice::✅ Python 2.7 installed"
-        
+
     - name: 📂 Install Git-Repo
       run: |
         echo "::notice::📂 Installing git-repo tool..."
@@ -139,11 +193,11 @@ jobs:
       run: |
         echo "::notice::🔍 Extracting device configuration..."
         cd android-recovery/device_tree
-        
+
         DEVICE_MAKEFILE=""
         DEVICE_DIRECTORY=""
         DEVICE_NAME=""
-        
+
         for file in *.mk; do
             makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
             brand=$(sed -n 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
@@ -158,7 +212,7 @@ jobs:
                 break
             fi
         done
-        
+
         cd ../
         mkdir -p "$DEVICE_DIRECTORY"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
@@ -174,18 +228,18 @@ jobs:
         lunch ${{ env.DEVICE_MAKEFILE }}-eng
         echo "::notice::✅ Lunch configured"
 
-    - name: 🔨 Building ${{ inputs.BUILD_TARGET }}.img
+    - name: 🔨 Building ${{ matrix.target }}.img
       run: |
-        echo "::warning::🔨 Building ${{ inputs.BUILD_TARGET }}.img (this will take ~45-60 minutes)..."
+        echo "::warning::🔨 Building ${{ matrix.target }}.img (this will take ~45-60 minutes)..."
         cd android-recovery
         source build/envsetup.sh
         lunch ${{ env.DEVICE_MAKEFILE }}-eng
         START_TIME=$(date +%s)
-        mka ${{ inputs.BUILD_TARGET }}image -j16
+        mka ${{ matrix.target }}image -j$(nproc --all)
         BUILD_STATUS=$?
         END_TIME=$(date +%s)
         BUILD_TIME=$((END_TIME - START_TIME))
-        
+
         if [ $BUILD_STATUS -eq 0 ]; then
           echo "::notice::✅ Build completed in $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
         else
@@ -196,9 +250,9 @@ jobs:
     - name: 📋 Set Build Metadata
       run: |
         echo "::notice::📋 Configuring build metadata..."
-        if [ ${{ inputs.BUILD_TARGET }} == 'recovery' ]; then
+        if [ ${{ matrix.target }} == 'recovery' ]; then
            echo "BUILD_TARGET_NAME=recovery" >> $GITHUB_ENV
-        elif [ ${{ inputs.BUILD_TARGET }} == 'boot' ]; then
+        elif [ ${{ matrix.target }} == 'boot' ]; then
            echo "BUILD_TARGET_NAME=boot" >> $GITHUB_ENV
         else
            echo "BUILD_TARGET_NAME=vendor_boot" >> $GITHUB_ENV
@@ -213,10 +267,11 @@ jobs:
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET_NAME }}.img
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/SHRP*.zip
           android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
-        name: Unofficial SHRP For ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
-        tag_name: ${{ github.run_id }}
+        name: Unofficial SHRP For ${{ env.DEVICE_NAME }} — ${{ matrix.target }} // ${{ env.BUILD_DATE }}
+        tag_name: ${{ github.run_id }}-${{ matrix.target }}
         body: |
           Build: ${{ inputs.MANIFEST_BRANCH }}
+          Target: ${{ matrix.target }}
           Device: [Device Tree/Branch](${{ env.DEVICE_TREE }}/tree/${{ env.DEVICE_TREE_BRANCH }})
           Commit: Most recent [commit](${{ env.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
 
@@ -231,3 +286,4 @@ jobs:
         python3 ldcheck -p system/lib64:vendor/lib64:system/lib:vendor/lib -d ${{ inputs.LDCHECKPATH }}
         echo "::notice::✅ LDCheck complete"
       continue-on-error: true
+
