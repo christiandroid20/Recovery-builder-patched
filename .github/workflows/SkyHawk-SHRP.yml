@@ -1061,6 +1061,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -z "${DEVICE_NAME:-}" ]; then
+            echo "::warning::DEVICE_NAME no está definido (probablemente falló un step anterior a su detección). Saltando inspección."
+            exit 0
+          fi
+
           cd android-recovery
 
           PRODUCT_DIR="out/target/product/${DEVICE_NAME}"
@@ -1125,7 +1130,7 @@ jobs:
           echo ""
           echo "Generated vendor/build.prop:"
 
-          if [ -f "out/target/product/${DEVICE_NAME}/vendor/build.prop" ]; then
+          if [ -n "${DEVICE_NAME:-}" ] && [ -f "out/target/product/${DEVICE_NAME}/vendor/build.prop" ]; then
 
             grep -n \
               "security_patch" \
