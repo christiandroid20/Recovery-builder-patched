@@ -973,7 +973,7 @@ jobs:
       - name: 🍽️ Setup Lunch
         shell: bash
         run: |
-          set -euo pipefail
+          set -eo pipefail
 
           cd android-recovery
 
@@ -1003,9 +1003,7 @@ jobs:
 
           echo "::notice::🔧 Loading build environment..."
 
-          set +u
           source "$TOP/build/envsetup.sh"
-          set -u
 
           export ALLOW_MISSING_DEPENDENCIES=true
 
@@ -1031,9 +1029,7 @@ jobs:
           export TOP="$PWD"
           export ALLOW_MISSING_DEPENDENCIES=true
 
-          set +u
           source "$TOP/build/envsetup.sh"
-          set -u
 
           lunch "${DEVICE_MAKEFILE}-eng"
 
