@@ -547,43 +547,62 @@ jobs:
 
           shopt -s nullglob
 
-          for file in *.mk; do
+          # Search recursively because Android device trees may keep the
+          # product makefile at the repository root or in a subdirectory.
+          PRODUCT_FILE_FOUND=""
+
+          while IFS= read -r -d '' file; do
 
             PRODUCT_NAME_VALUE="$(
-              sed -n \
-                's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=[[:space:]]*\(.*\)/\1/p' \
-                "$file" |
-                head -n1
-            )"
-
-            PRODUCT_BRAND_VALUE="$(
-              sed -n \
-                's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=[[:space:]]*\(.*\)/\1/p' \
-                "$file" |
-                head -n1
+              sed -n                 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*[:?+]*=[[:space:]]*\(.*\)/\1/p'                 "$file" |
+                head -n1 |
+                sed 's/[[:space:]]*$//'
             )"
 
             PRODUCT_DEVICE_VALUE="$(
-              sed -n \
-                's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=[[:space:]]*\(.*\)/\1/p' \
-                "$file" |
-                head -n1
+              sed -n                 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*[:?+]*=[[:space:]]*\(.*\)/\1/p'                 "$file" |
+                head -n1 |
+                sed 's/[[:space:]]*$//'
             )"
 
-            if [
-              -n "$PRODUCT_NAME_VALUE" ] &&
-              [ -n "$PRODUCT_BRAND_VALUE" ] &&
-              [ -n "$PRODUCT_DEVICE_VALUE"
-            ]; then
+            PRODUCT_BRAND_VALUE="$(
+              sed -n                 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*[:?+]*=[[:space:]]*\(.*\)/\1/p'                 "$file" |
+                head -n1 |
+                sed 's/[[:space:]]*$//'
+            )"
+
+            if [[ -n "$PRODUCT_NAME_VALUE" &&
+                  -n "$PRODUCT_DEVICE_VALUE" ]]; then
 
               DEVICE_MAKEFILE="$PRODUCT_NAME_VALUE"
-              DEVICE_DIRECTORY="device/$PRODUCT_BRAND_VALUE"
               DEVICE_NAME="$PRODUCT_DEVICE_VALUE"
 
+              if [[ -n "$PRODUCT_BRAND_VALUE" ]]; then
+                DEVICE_DIRECTORY="device/$PRODUCT_BRAND_VALUE"
+              else
+                DEVICE_DIRECTORY="device/samsung"
+                echo "::notice::PRODUCT_BRAND not found; using device/samsung"
+              fi
+
+              PRODUCT_FILE_FOUND="$file"
               break
             fi
 
-          done
+          done < <(
+            find .               -type f               -name "*.mk"               -not -path "./.git/*"               -print0 |
+            sort -z
+          )
+
+          if [[ -z "$PRODUCT_FILE_FOUND" ]]; then
+            echo "::error::❌ Could not find a product makefile containing PRODUCT_NAME and PRODUCT_DEVICE."
+            echo ""
+            echo "Available makefiles:"
+            find .               -type f               -name "*.mk"               -not -path "./.git/*"               -print |
+              sort
+            exit 1
+          fi
+
+          echo "::notice::Product makefile detected: $PRODUCT_FILE_FOUND"
 
           if [ -z "$DEVICE_MAKEFILE" ]; then
             echo "::error::❌ PRODUCT_NAME could not be detected."
@@ -718,26 +737,29 @@ jobs:
           DEVICE_PATH="$DEVICE_DIRECTORY/$DEVICE_NAME"
           PRODUCT_FILE="$DEVICE_PATH/${DEVICE_MAKEFILE}.mk"
 
-          echo "Expected:"
+          echo "Expected product:"
           echo "$PRODUCT_FILE"
 
           if [ ! -f "$PRODUCT_FILE" ]; then
+            PRODUCT_FILE="$(
+              find "$DEVICE_PATH"                 -maxdepth 2                 -type f                 -name "*.mk"                 -exec grep -l                   -m1                   "PRODUCT_NAME[[:space:]]*[:?+]*=[[:space:]]*${DEVICE_MAKEFILE}"                   {} + |
+                head -n1 || true
+            )"
+          fi
 
-            echo "::error::❌ Product makefile not found."
+          if [ -z "$PRODUCT_FILE" ] || [ ! -f "$PRODUCT_FILE" ]; then
+            echo "::error::❌ Product makefile not found for ${DEVICE_MAKEFILE}."
 
             echo ""
             echo "Available makefiles:"
-
-            find "$DEVICE_PATH" \
-              -maxdepth 2 \
-              -name "*.mk" \
-              -print \
-              | sort
+            find "$DEVICE_PATH"               -maxdepth 2               -type f               -name "*.mk"               -print |
+              sort
 
             exit 1
           fi
 
-          echo "::notice::✅ ${DEVICE_MAKEFILE}.mk found"
+          echo "::notice::✅ Product makefile found:"
+          echo "$PRODUCT_FILE"
 
 
       # ================================================================
