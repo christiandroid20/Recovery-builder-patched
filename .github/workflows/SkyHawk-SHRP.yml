@@ -693,9 +693,7 @@ jobs:
             echo "::warning::vendorsetup.sh missing."
             echo "::notice::Creating compatibility vendorsetup.sh"
 
-            cat > "$DEVICE_PATH/vendorsetup.sh" <<EOF
-add_lunch_combo ${DEVICE_MAKEFILE}-eng
-EOF
+            echo "add_lunch_combo ${DEVICE_MAKEFILE}-eng" > "$DEVICE_PATH/vendorsetup.sh"
 
             chmod +x "$DEVICE_PATH/vendorsetup.sh"
 
