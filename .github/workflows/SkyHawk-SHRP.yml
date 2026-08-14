@@ -763,6 +763,62 @@ jobs:
 
 
       # ================================================================
+      # FIX DUPLICATE VENDOR SECURITY PATCH (ROOT CAUSE)
+      # ================================================================
+      #
+      # The core AOSP build system always emits a
+      # "ro.vendor.build.security_patch=$(BOARD_SECURITY_PATCH)" line for
+      # the vendor partition. When BoardConfig.mk does not define
+      # BOARD_SECURITY_PATCH, that line is emitted EMPTY. If the device
+      # tree's vendor.prop *also* hardcodes ro.vendor.build.security_patch,
+      # post_process_props sees two assignments for the same key and
+      # fails the build ("found duplicate sysprop assignments"), even
+      # though neither file alone is empty/invalid.
+      #
+      # Fix: make BOARD_SECURITY_PATCH the single source of truth by
+      # setting it in BoardConfig.mk, and drop the hardcoded line from
+      # vendor.prop so only one assignment reaches build.prop.
+
+      - name: 🩹 Fix duplicate vendor security patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+
+          DEVICE_PATH="$DEVICE_DIRECTORY/$DEVICE_NAME"
+          BOARD_CONFIG="$DEVICE_PATH/BoardConfig.mk"
+
+          VENDOR_PROP="$(
+            find "$DEVICE_PATH" \
+              -name "vendor.prop" \
+              -print \
+              -quit
+          )"
+
+          if [ -n "$VENDOR_PROP" ] && [ -f "$VENDOR_PROP" ]; then
+            if grep -qE '^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=' "$VENDOR_PROP"; then
+              echo "::notice::Removing hardcoded ro.vendor.build.security_patch from $VENDOR_PROP"
+              sed -i '/^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=/d' "$VENDOR_PROP"
+            fi
+          fi
+
+          if [ -f "$BOARD_CONFIG" ]; then
+            if grep -qE '^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"; then
+              echo "::notice::Updating existing BOARD_SECURITY_PATCH in $BOARD_CONFIG"
+              sed -i "s|^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=.*|BOARD_SECURITY_PATCH := ${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
+            else
+              echo "::notice::Adding BOARD_SECURITY_PATCH to $BOARD_CONFIG"
+              printf '\nBOARD_SECURITY_PATCH := %s\n' "${EXPECTED_VENDOR_SECURITY_PATCH}" >> "$BOARD_CONFIG"
+            fi
+          else
+            echo "::warning::BoardConfig.mk not found at $BOARD_CONFIG"
+          fi
+
+          echo "::notice::✅ Vendor security patch now sourced solely from BOARD_SECURITY_PATCH"
+
+
+      # ================================================================
       # SYS PROP DIAGNOSTIC
       # ================================================================
 
@@ -877,11 +933,13 @@ jobs:
 
           echo ""
 
-          if grep -q \
-            "^ro\.vendor\.build\.security_patch=${EXPECTED_VENDOR_SECURITY_PATCH}$" \
-            "$VENDOR_PROP"; then
+          BOARD_CONFIG="$DEVICE_PATH/BoardConfig.mk"
 
-            echo "::notice::✅ Expected vendor security patch found."
+          if grep -qE \
+            "^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=[[:space:]]*${EXPECTED_VENDOR_SECURITY_PATCH}[[:space:]]*$" \
+            "$BOARD_CONFIG" 2>/dev/null; then
+
+            echo "::notice::✅ Expected vendor security patch found (BOARD_SECURITY_PATCH)."
 
           else
 
