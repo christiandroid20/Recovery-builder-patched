@@ -145,7 +145,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: gitgud-crypto-test
+      DEVICE_TREE_BRANCH: optimize-recovery-size
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
@@ -763,23 +763,15 @@ jobs:
 
 
       # ================================================================
-      # FIX DUPLICATE VENDOR SECURITY PATCH (ROOT CAUSE)
+      # FIX SYSTEM AND VENDOR SECURITY PATCH PROPERTIES
       # ================================================================
       #
-      # The core AOSP build system always emits a
-      # "ro.vendor.build.security_patch=$(BOARD_SECURITY_PATCH)" line for
-      # the vendor partition. When BoardConfig.mk does not define
-      # BOARD_SECURITY_PATCH, that line is emitted EMPTY. If the device
-      # tree's vendor.prop *also* hardcodes ro.vendor.build.security_patch,
-      # post_process_props sees two assignments for the same key and
-      # fails the build ("found duplicate sysprop assignments"), even
-      # though neither file alone is empty/invalid.
-      #
-      # Fix: make BOARD_SECURITY_PATCH the single source of truth by
-      # setting it in BoardConfig.mk, and drop the hardcoded line from
-      # vendor.prop so only one assignment reaches build.prop.
+      # BOARD_SECURITY_PATCH and VENDOR_SECURITY_PATCH are separate:
+      # the former is used for the system patch level, the latter for
+      # ro.vendor.build.security_patch. Keep both aligned to the A35
+      # firmware patch level and remove the duplicate vendor.prop entry.
 
-      - name: 🩹 Fix duplicate vendor security patch
+      - name: 🩹 Fix system and vendor security patch properties
         shell: bash
         run: |
           set -euo pipefail
@@ -798,24 +790,32 @@ jobs:
 
           if [ -n "$VENDOR_PROP" ] && [ -f "$VENDOR_PROP" ]; then
             if grep -qE '^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=' "$VENDOR_PROP"; then
-              echo "::notice::Removing hardcoded ro.vendor.build.security_patch from $VENDOR_PROP"
+              echo "::notice::Removing duplicate ro.vendor.build.security_patch from $VENDOR_PROP"
               sed -i '/^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=/d' "$VENDOR_PROP"
             fi
           fi
 
-          if [ -f "$BOARD_CONFIG" ]; then
-            if grep -qE '^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"; then
-              echo "::notice::Updating existing BOARD_SECURITY_PATCH in $BOARD_CONFIG"
-              sed -i "s|^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=.*|BOARD_SECURITY_PATCH := ${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
-            else
-              echo "::notice::Adding BOARD_SECURITY_PATCH to $BOARD_CONFIG"
-              printf '\nBOARD_SECURITY_PATCH := %s\n' "${EXPECTED_VENDOR_SECURITY_PATCH}" >> "$BOARD_CONFIG"
-            fi
-          else
-            echo "::warning::BoardConfig.mk not found at $BOARD_CONFIG"
+          if [ ! -f "$BOARD_CONFIG" ]; then
+            echo "::error::BoardConfig.mk not found: $BOARD_CONFIG"
+            exit 1
           fi
 
-          echo "::notice::✅ Vendor security patch now sourced solely from BOARD_SECURITY_PATCH"
+          set_make_var() {
+            local variable="$1"
+            if grep -qE "^[[:space:]]*\${variable}[[:space:]]*:=" "$BOARD_CONFIG"; then
+              sed -i "s|^[[:space:]]*\${variable}[[:space:]]*:=.*|\${variable} := \${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
+            else
+              printf '\n%s := %s\n' "$variable" "$EXPECTED_VENDOR_SECURITY_PATCH" >> "$BOARD_CONFIG"
+            fi
+          }
+
+          set_make_var BOARD_SECURITY_PATCH
+          set_make_var VENDOR_SECURITY_PATCH
+
+          echo "Resolved patch variables:"
+          grep -nE '^[[:space:]]*(BOARD|VENDOR)_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"
+
+          echo "::notice::System and vendor patch levels set to \${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
@@ -1218,6 +1218,77 @@ jobs:
               || true
 
           fi
+
+
+      # ================================================================
+      # RECOVERY SIZE DIAGNOSTICS (FAILURE ONLY)
+      # ================================================================
+
+      - name: 📏 Collect recovery image size details
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+
+          cd android-recovery
+          PRODUCT_DIR="out/target/product/\${DEVICE_NAME:-a35x}"
+          REPORT="\${GITHUB_WORKSPACE}/shrp-recovery-size-report.txt"
+
+          {
+            echo "SHRP recovery size diagnostics"
+            echo "Device: \${DEVICE_NAME:-unknown}"
+            echo "Device tree branch: \${DEVICE_TREE_BRANCH}"
+            echo "Device tree commit: \${COMMIT_ID:-unknown}"
+            echo "Expected vendor patch: \${EXPECTED_VENDOR_SECURITY_PATCH}"
+            echo ""
+
+            for file in \
+              "$PRODUCT_DIR/recovery.img" \
+              "$PRODUCT_DIR/ramdisk-recovery.img" \
+              "$PRODUCT_DIR/installed-files-ramdisk.txt" \
+              "$PRODUCT_DIR/vendor/build.prop" \
+              "$PRODUCT_DIR/recovery/root/prop.default"; do
+              if [ -f "$file" ]; then
+                stat -c '%s bytes | %n' "$file"
+              else
+                echo "MISSING | $file"
+              fi
+            done
+
+            echo ""
+            echo "Largest files in generated recovery ramdisk:"
+            if [ -d "$PRODUCT_DIR/recovery/root" ]; then
+              find "$PRODUCT_DIR/recovery/root" -type f -printf '%s\t%p\n' \
+                | sort -nr | head -n 100
+            fi
+
+            echo ""
+            echo "Largest installed ramdisk entries:"
+            if [ -f "$PRODUCT_DIR/installed-files-ramdisk.txt" ]; then
+              sort -nr "$PRODUCT_DIR/installed-files-ramdisk.txt" | head -n 100
+            fi
+
+            echo ""
+            echo "Generated security patch properties:"
+            grep -n 'security_patch' "$PRODUCT_DIR/vendor/build.prop" "$PRODUCT_DIR/recovery/root/prop.default" 2>/dev/null || true
+          } > "$REPORT"
+
+          cat "$REPORT"
+
+
+      - name: 📤 Upload recovery diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shrp-recovery-diagnostics-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            shrp-recovery-size-report.txt
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.img
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/installed-files-ramdisk.txt
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor/build.prop
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/prop.default
+          if-no-files-found: warn
+          retention-days: 7
 
 
       # ================================================================
