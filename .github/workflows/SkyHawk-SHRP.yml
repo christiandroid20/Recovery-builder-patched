@@ -949,6 +949,29 @@ jobs:
 
 
       # ================================================================
+      # VALIDATE VENDOR SECURITY PATCH VARIABLE
+      # ================================================================
+
+      - name: 🔐 Validate VENDOR_SECURITY_PATCH
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          BOARD_CONFIG="$DEVICE_DIRECTORY/$DEVICE_NAME/BoardConfig.mk"
+
+          if ! grep -qE \
+            "^[[:space:]]*VENDOR_SECURITY_PATCH[[:space:]]*:=[[:space:]]*\${EXPECTED_VENDOR_SECURITY_PATCH}[[:space:]]*$" \
+            "$BOARD_CONFIG"; then
+            echo "::error::VENDOR_SECURITY_PATCH does not match the expected A35 firmware patch."
+            grep -nE '^[[:space:]]*VENDOR_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG" || true
+            exit 1
+          fi
+
+          echo "::notice::VENDOR_SECURITY_PATCH matches \${EXPECTED_VENDOR_SECURITY_PATCH}"
+
+
+      # ================================================================
       # UNIQUE SOURCE PROPERTY CHECK
       # ================================================================
 
