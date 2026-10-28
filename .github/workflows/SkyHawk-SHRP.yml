@@ -144,8 +144,8 @@ jobs:
       # DEVICE TREE
       # ============================================================
 
-      DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x/tree/gitgud-crypto-test.git
-      DEVICE_TREE_BRANCH: shrp-12.1
+      DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
+      DEVICE_TREE_BRANCH: gitgud-crypto-test
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
