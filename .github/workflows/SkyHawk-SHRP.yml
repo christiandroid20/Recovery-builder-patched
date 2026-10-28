@@ -802,8 +802,8 @@ jobs:
 
           set_make_var() {
             local variable="$1"
-            if grep -qE "^[[:space:]]*\${variable}[[:space:]]*:=" "$BOARD_CONFIG"; then
-              sed -i "s|^[[:space:]]*\${variable}[[:space:]]*:=.*|\${variable} := \${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
+            if grep -qE "^[[:space:]]*${variable}[[:space:]]*:=" "$BOARD_CONFIG"; then
+              sed -i "s|^[[:space:]]*${variable}[[:space:]]*:=.*|${variable} := ${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
             else
               printf '\n%s := %s\n' "$variable" "$EXPECTED_VENDOR_SECURITY_PATCH" >> "$BOARD_CONFIG"
             fi
@@ -815,7 +815,7 @@ jobs:
           echo "Resolved patch variables:"
           grep -nE '^[[:space:]]*(BOARD|VENDOR)_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"
 
-          echo "::notice::System and vendor patch levels set to \${EXPECTED_VENDOR_SECURITY_PATCH}"
+          echo "::notice::System and vendor patch levels set to ${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
@@ -1231,15 +1231,15 @@ jobs:
           set +e
 
           cd android-recovery
-          PRODUCT_DIR="out/target/product/\${DEVICE_NAME:-a35x}"
-          REPORT="\${GITHUB_WORKSPACE}/shrp-recovery-size-report.txt"
+          PRODUCT_DIR="out/target/product/${DEVICE_NAME:-a35x}"
+          REPORT="${GITHUB_WORKSPACE}/shrp-recovery-size-report.txt"
 
           {
             echo "SHRP recovery size diagnostics"
-            echo "Device: \${DEVICE_NAME:-unknown}"
-            echo "Device tree branch: \${DEVICE_TREE_BRANCH}"
-            echo "Device tree commit: \${COMMIT_ID:-unknown}"
-            echo "Expected vendor patch: \${EXPECTED_VENDOR_SECURITY_PATCH}"
+            echo "Device: ${DEVICE_NAME:-unknown}"
+            echo "Device tree branch: ${DEVICE_TREE_BRANCH}"
+            echo "Device tree commit: ${COMMIT_ID:-unknown}"
+            echo "Expected vendor patch: ${EXPECTED_VENDOR_SECURITY_PATCH}"
             echo ""
 
             for file in \
