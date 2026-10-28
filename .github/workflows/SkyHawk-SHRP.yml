@@ -1399,7 +1399,10 @@ jobs:
 
             for file in \
               "$PRODUCT_DIR/recovery.img" \
+              "$PRODUCT_DIR/kernel" \
               "$PRODUCT_DIR/ramdisk-recovery.img" \
+              "$DEVICE_DIRECTORY/$DEVICE_NAME/prebuilt/dtb.img" \
+              "$DEVICE_DIRECTORY/$DEVICE_NAME/prebuilt/dtbo.img" \
               "$PRODUCT_DIR/installed-files-ramdisk.txt" \
               "$PRODUCT_DIR/vendor/build.prop" \
               "$PRODUCT_DIR/recovery/root/prop.default"; do
@@ -1409,6 +1412,15 @@ jobs:
                 echo "MISSING | $file"
               fi
             done
+
+            echo ""
+            echo "Recovery module inventory:"
+            MODULE_DIR="$DEVICE_DIRECTORY/$DEVICE_NAME/recovery/root/lib/modules"
+            if [ -d "$MODULE_DIR" ]; then
+              echo "Module files: $(find "$MODULE_DIR" -maxdepth 1 -type f -name '*.ko' | wc -l)"
+              echo "Module load entries: $(wc -l < "$MODULE_DIR/modules.load.recovery" 2>/dev/null || echo 0)"
+              du -ch "$MODULE_DIR"/*.ko 2>/dev/null | tail -n 1 || true
+            fi
 
             echo ""
             echo "Largest files in generated recovery ramdisk:"
