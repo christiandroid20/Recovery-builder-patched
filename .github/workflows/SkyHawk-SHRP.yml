@@ -724,6 +724,138 @@ jobs:
 
 
       # ================================================================
+      # ================================================================
+      # PRUNE OPTIONAL CAMERA / NPU / VIDEO MODULES FOR RECOVERY
+      # ================================================================
+
+      - name: ✂️ Prune non-recovery camera and accelerator modules
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          MODULE_DIR="${DEVICE_DIRECTORY}/${DEVICE_NAME}/recovery/root/lib/modules"
+
+          if [ ! -d "$MODULE_DIR" ]; then
+            echo "::error::Recovery module directory not found: $MODULE_DIR"
+            exit 1
+          fi
+
+          # Recovery does not use camera capture, ISP tuning, NPU, or the
+          # hardware video codec. Keep display, touchscreen, USB, Wi-Fi,
+          # storage, fingerprint, TEE and encryption-related modules.
+          EXCLUDED_MODULES=(
+            fimc-is.ko
+            is-cis-3l6.ko
+            is-cis-gn8.ko
+            is-cis-imx882.ko
+            is-cis-hi1339.ko
+            is-cis-gc05a3.ko
+            is-cis-gc08a3.ko
+            is-actuator-ak737x.ko
+            is-flash-sm5714.ko
+            pablo-hws.ko
+            pablo-libs.ko
+            pablo-icpu.ko
+            pablo-self-tests.ko
+            pablo-smc.ko
+            is-device-eeprom.ko
+            is-device-otprom.ko
+            smfc.ko
+            scaler.ko
+            gdc.ko
+            votf.ko
+            npu.ko
+            exynos_mfc.ko
+          )
+
+          EXCLUDED_LIST="$(mktemp)"
+          for module in "${EXCLUDED_MODULES[@]}"; do
+            if [ -f "$MODULE_DIR/$module" ]; then
+              printf '%s\n' "$module" >> "$EXCLUDED_LIST"
+              echo "Removing optional module: $module"
+              rm -f "$MODULE_DIR/$module"
+            else
+              echo "::warning::Optional module not present: $module"
+            fi
+          done
+
+          if [ -f "$MODULE_DIR/modules.load.recovery" ]; then
+            grep -Fvx -f "$EXCLUDED_LIST" "$MODULE_DIR/modules.load.recovery" \
+              > "$MODULE_DIR/modules.load.recovery.tmp" || true
+            mv "$MODULE_DIR/modules.load.recovery.tmp" "$MODULE_DIR/modules.load.recovery"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.dep" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) excluded["/lib/modules/" m] = 1
+              }
+              {
+                colon = index($0, ":")
+                if (!colon) { print; next }
+                target = substr($0, 1, colon - 1)
+                if (target in excluded) next
+                rest = substr($0, colon + 1)
+                count = split(rest, deps, /[[:space:]]+/)
+                output = target ":"
+                for (i = 1; i <= count; i++) {
+                  if (deps[i] != "" && !(deps[i] in excluded)) output = output " " deps[i]
+                }
+                sub(/[[:space:]]+$/, "", output)
+                print output
+              }
+            ' "$MODULE_DIR/modules.dep" > "$MODULE_DIR/modules.dep.tmp"
+            mv "$MODULE_DIR/modules.dep.tmp" "$MODULE_DIR/modules.dep"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.alias" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) {
+                  sub(/\.ko$/, "", m)
+                  gsub(/-/, "_", m)
+                  excluded[m] = 1
+                }
+              }
+              /^#/ { print; next }
+              NF >= 3 && ($NF in excluded) { next }
+              { print }
+            ' "$MODULE_DIR/modules.alias" > "$MODULE_DIR/modules.alias.tmp"
+            mv "$MODULE_DIR/modules.alias.tmp" "$MODULE_DIR/modules.alias"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.softdep" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) {
+                  sub(/\.ko$/, "", m)
+                  gsub(/-/, "_", m)
+                  excluded[m] = 1
+                }
+              }
+              /^#/ { print; next }
+              {
+                skip = 0
+                for (i = 1; i <= NF; i++) {
+                  token = $i
+                  sub(/:$/, "", token)
+                  gsub(/-/, "_", token)
+                  if (token in excluded) skip = 1
+                }
+                if (!skip) print
+              }
+            ' "$MODULE_DIR/modules.softdep" > "$MODULE_DIR/modules.softdep.tmp"
+            mv "$MODULE_DIR/modules.softdep.tmp" "$MODULE_DIR/modules.softdep"
+          fi
+
+          rm -f "$EXCLUDED_LIST"
+
+          echo "Remaining module files: $(find "$MODULE_DIR" -maxdepth 1 -type f -name '*.ko' | wc -l)"
+          echo "Remaining recovery load entries: $(wc -l < "$MODULE_DIR/modules.load.recovery")"
+          echo "::notice::Optional camera/ISP/NPU/video modules pruned; touch, display, USB, storage and TEE modules preserved"
+
+
       # VERIFY PRODUCT MAKEFILE
       # ================================================================
 
