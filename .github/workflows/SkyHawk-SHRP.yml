@@ -145,7 +145,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: optimize-recovery-size
+      DEVICE_TREE_BRANCH: a35-recovery-test
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
