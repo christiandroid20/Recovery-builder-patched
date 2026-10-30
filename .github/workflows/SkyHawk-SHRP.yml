@@ -18,6 +18,12 @@ on:
           - shrp-12.1
           - shrp-9.0
 
+      DEVICE_TREE_BRANCH:
+        description: 'A35 device-tree branch to compile'
+        required: true
+        default: 'test/combined-claude-fixes-20261030'
+        type: string
+
       BUILD_TARGET:
         description: 'Build Target(s) — separados por coma: recovery,boot,vendor_boot'
         required: true
@@ -145,7 +151,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: a35-recovery-test
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
