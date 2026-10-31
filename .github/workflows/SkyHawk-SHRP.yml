@@ -145,7 +145,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: build-c-original
+      DEVICE_TREE_BRANCH: test/a35x-bootloop-init-revert-20261031
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
