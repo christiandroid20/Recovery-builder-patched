@@ -172,6 +172,11 @@ jobs:
 
       ALLOW_MISSING_DEPENDENCIES: true
 
+      # Persistent compiler cache for faster subsequent Android builds.
+      USE_CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+
     steps:
 
       # ============================================================
@@ -306,6 +311,33 @@ jobs:
             zip
 
           echo "::notice::✅ Base dependencies installed"
+
+
+      # ================================================================
+      # RESTORE COMPILER CACHE
+      # ================================================================
+
+      - name: ♻️ Restore Android compiler cache
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-
+
+      - name: ⚙️ Configure compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache --version
+          ccache --set-config=compiler_check=content
+          ccache --max-size=6G
+          ccache --zero-stats
+          echo "CCACHE_DIR=$CCACHE_DIR"
+          echo "CCACHE_MAXSIZE=6G"
+          ccache --show-stats
 
 
       # ============================================================
@@ -1588,6 +1620,27 @@ jobs:
           echo "::notice::✅ LDCheck complete"
 
         continue-on-error: true
+
+
+      # ================================================================
+      # SAVE COMPILER CACHE
+      # ================================================================
+
+      - name: 💾 Save Android compiler cache
+        if: always() && steps.ccache-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-${{ github.run_id }}
+
+      - name: 📊 Report compiler cache statistics
+        if: always()
+        shell: bash
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            echo "Final compiler cache statistics:"
+            ccache --show-stats
+          fi
 
 
       # ================================================================
