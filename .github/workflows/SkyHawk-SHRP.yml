@@ -691,6 +691,80 @@ jobs:
 
 
       # ================================================================
+      # USE GZIP FOR A SMALLER RECOVERY RAMDISK
+      # The A35 s5e8835 defconfig supports both RD_GZIP and RD_LZ4.
+      # Keep all payloads/modules; change only the ramdisk compression.
+      # ================================================================
+
+      - name: 📦 Use gzip for smaller A35 recovery ramdisk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          DEVICE_PATH="$DEVICE_DIRECTORY/$DEVICE_NAME"
+          BOARD_CONFIG="$DEVICE_PATH/BoardConfig.mk"
+          DEFCONFIG_URL="https://raw.githubusercontent.com/raspiduino/sm-a356e-kernel/e1b3f678ae568be021d54aa88f21003fa3adb65a/arch/arm64/configs/s5e8835-a35xjvxx_defconfig"
+          DEFCONFIG="$(mktemp)"
+          trap 'rm -f "$DEFCONFIG"' EXIT
+
+          if [ ! -f "$BOARD_CONFIG" ]; then
+            echo "::error::A35 BoardConfig.mk not found: $BOARD_CONFIG"
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location "$DEFCONFIG_URL" -o "$DEFCONFIG"
+
+          grep -qx 'CONFIG_RD_GZIP=y' "$DEFCONFIG" || {
+            echo "::error::A35 kernel defconfig does not confirm GZIP ramdisk support."
+            exit 1
+          }
+
+          grep -qx 'CONFIG_RD_LZ4=y' "$DEFCONFIG" || {
+            echo "::error::A35 kernel defconfig does not confirm the existing LZ4 fallback."
+            exit 1
+          }
+
+          grep -qx 'BOARD_RAMDISK_USE_LZ4 := true' "$BOARD_CONFIG" || {
+            echo "::error::Unexpected BOARD_RAMDISK_USE_LZ4 value; refusing an unreviewed edit."
+            grep -n 'BOARD_RAMDISK_USE_LZ4' "$BOARD_CONFIG" || true
+            exit 1
+          }
+
+          # Preserve an in-workspace copy for diagnostics; the upstream tree is untouched.
+          cp "$BOARD_CONFIG" "$BOARD_CONFIG.pre-gzip"
+
+          sed -i \
+            's/^BOARD_RAMDISK_USE_LZ4 := true$/BOARD_RAMDISK_USE_LZ4 := false/' \
+            "$BOARD_CONFIG"
+
+          grep -qx 'BOARD_RAMDISK_USE_LZ4 := false' "$BOARD_CONFIG" || {
+            echo "::error::Failed to select GZIP ramdisk compression."
+            exit 1
+          }
+
+          # Guard the features explicitly requested for this device.
+          grep -qx 'TW_INCLUDE_CRYPTO := true' "$BOARD_CONFIG" || {
+            echo "::error::TW_INCLUDE_CRYPTO must remain enabled."
+            exit 1
+          }
+
+          grep -qx 'TW_FORCE_KEYMASTER_VER := false' "$BOARD_CONFIG" || {
+            echo "::error::Unexpected Keymaster override; refusing to continue."
+            exit 1
+          }
+
+          grep -qx 'SHRP_CUSTOM_FLASHLIGHT := true' "$BOARD_CONFIG" || {
+            echo "::error::SHRP custom flashlight support must remain enabled."
+            exit 1
+          }
+
+          echo "::notice::A35 kernel defconfig confirms CONFIG_RD_GZIP=y and CONFIG_RD_LZ4=y."
+          echo "::notice::Recovery ramdisk compression changed to GZIP; no modules or recovery features were removed."
+          grep -nE 'BOARD_RAMDISK_USE_LZ4|TW_INCLUDE_CRYPTO|TW_FORCE_KEYMASTER_VER|SHRP_CUSTOM_FLASHLIGHT' "$BOARD_CONFIG"
+
+
+      # ================================================================
       # ENSURE VENDORSETUP
       # ================================================================
 
@@ -1418,6 +1492,38 @@ jobs:
 
           echo "::notice::✅ Build completed."
           echo "::notice::Build time: $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
+
+
+      # ================================================================
+      # VERIFY RECOVERY RAMDISK COMPRESSION
+      # ================================================================
+
+      - name: 🧪 Verify GZIP recovery ramdisk
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PRODUCT_DIR="android-recovery/out/target/product/\${DEVICE_NAME:-a35x}"
+          RAMDISK="$PRODUCT_DIR/ramdisk-recovery.img"
+
+          if [ ! -f "$RAMDISK" ]; then
+            echo "::warning::Recovery ramdisk was not produced; compression verification skipped."
+            exit 0
+          fi
+
+          gzip -t "$RAMDISK" || {
+            echo "::error::Recovery ramdisk is not a valid GZIP stream."
+            file "$RAMDISK" || true
+            exit 1
+          }
+
+          echo "::notice::GZIP recovery ramdisk integrity check passed."
+          stat -c 'Compressed ramdisk: %s bytes' "$RAMDISK"
+
+          if [ -f "$PRODUCT_DIR/recovery.img" ]; then
+            stat -c 'Recovery image: %s bytes' "$PRODUCT_DIR/recovery.img"
+          fi
 
 
       # ================================================================
