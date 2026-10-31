@@ -1,11 +1,6 @@
 name: SkyHawk [SHRP]
 
 on:
-  push:
-    branches:
-      - fix-a35-vendor-patch-and-diagnostics
-    paths:
-      - .github/workflows/SkyHawk-SHRP.yml
   workflow_dispatch:
     inputs:
       MANIFEST:
@@ -26,7 +21,13 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'A35 device-tree branch to compile'
         required: true
-        default: 'debug/a35x-recovery-startup-baseline-20261030'
+        default: 'feature/gsi-manager-a35x-20261031'
+        type: string
+
+      RECOVERY_CORE_BRANCH:
+        description: 'Recovery core branch to compile'
+        required: true
+        default: 'feature/gsi-manager-erofs-ext4-20261031'
         type: string
 
       BUILD_TARGET:
@@ -163,7 +164,8 @@ jobs:
       # ============================================================
 
       RECOVERY_CORE: https://github.com/christiandroid20/shrp_android_bootable_recovery.git
-      RECOVERY_CORE_BRANCH: android-12.1
+      RECOVERY_CORE_BRANCH: ${{ inputs.RECOVERY_CORE_BRANCH || 'feature/gsi-manager-erofs-ext4-20261031' }}
+      EROFS_UTILS_REV: 7293c06aaf1a792ff4fd94b1baa5a2194406c5a5
 
       # ============================================================
       # EXPECTED SECURITY PATCH
@@ -225,6 +227,10 @@ jobs:
           echo ""
           echo "Recovery core branch:"
           echo "${RECOVERY_CORE_BRANCH}"
+
+          echo ""
+          echo "EROFS utilities revision:"
+          echo "${EROFS_UTILS_REV}"
 
           echo ""
           echo "Build target:"
@@ -491,6 +497,28 @@ jobs:
 
 
       # ============================================================
+      - name: 🧩 Pin EROFS utilities with recovery and xattr support
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery/external/erofs-utils
+
+          git fetch --depth=1 \
+            https://android.googlesource.com/platform/external/erofs-utils \
+            "${EROFS_UTILS_REV}"
+
+          git checkout --detach "${EROFS_UTILS_REV}"
+
+          grep -Fq 'name: "fsck.erofs.recovery"' Android.bp
+          grep -Fq '"xattrs"' fsck/main.c
+          grep -Fq 'lsetxattr' fsck/main.c
+
+          echo "Pinned EROFS utilities:"
+          git rev-parse HEAD
+          echo "::notice::EROFS extraction, xattr export and recovery module checks passed"
+
+
       # INSTALL YOUR RECOVERY FORK
       # ============================================================
 
