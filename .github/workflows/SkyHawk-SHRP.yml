@@ -1,6 +1,11 @@
 name: SkyHawk [SHRP]
 
 on:
+  push:
+    branches:
+      - fix-a35-vendor-patch-and-diagnostics
+    paths:
+      - .github/workflows/SkyHawk-SHRP.yml
   workflow_dispatch:
     inputs:
       MANIFEST:
@@ -21,7 +26,7 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'A35 device-tree branch to compile'
         required: true
-        default: 'test/combined-claude-fixes-20261030'
+        default: 'debug/a35x-recovery-startup-baseline-20261030'
         type: string
 
       BUILD_TARGET:
@@ -76,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          raw="${{ inputs.BUILD_TARGET }}"
+          raw="${{ inputs.BUILD_TARGET || 'recovery' }}"
 
           if [ -z "$raw" ]; then
             raw="recovery"
@@ -151,7 +156,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH || 'debug/a35x-recovery-startup-baseline-20261030' }}
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
@@ -199,11 +204,11 @@ jobs:
           echo "=========================================="
 
           echo "Manifest:"
-          echo "${{ inputs.MANIFEST }}"
+          echo "${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}"
 
           echo ""
           echo "Manifest branch:"
-          echo "${{ inputs.MANIFEST_BRANCH }}"
+          echo "${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}"
 
           echo ""
           echo "Device tree:"
@@ -227,7 +232,7 @@ jobs:
 
           echo ""
           echo "LDCheck:"
-          echo "${{ inputs.LDCHECK }}"
+          echo "${{ inputs.LDCHECK || false }}"
 
           echo ""
           echo "=========================================="
@@ -322,9 +327,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: |
-            ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-
+            ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-
 
       - name: ⚙️ Configure compiler cache
         shell: bash
@@ -379,7 +384,7 @@ jobs:
       # ============================================================
 
       - name: 🐍 Configure Python 2.7
-        if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+        if: ${{ (inputs.MANIFEST_BRANCH || 'shrp-12.1') == 'shrp-12.1' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -455,8 +460,8 @@ jobs:
 
           repo init \
             --depth=1 \
-            -u "${{ inputs.MANIFEST }}" \
-            -b "${{ inputs.MANIFEST_BRANCH }}"
+            -u "${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}" \
+            -b "${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}"
 
           echo "::notice::✅ SHRP repository initialized"
 
@@ -1549,10 +1554,10 @@ jobs:
             Target: ${{ matrix.target }}
 
             Manifest:
-            ${{ inputs.MANIFEST }}
+            ${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}
 
             Manifest branch:
-            ${{ inputs.MANIFEST_BRANCH }}
+            ${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}
 
             Device Tree:
             ${{ env.DEVICE_TREE }}
@@ -1575,7 +1580,7 @@ jobs:
       # ================================================================
 
       - name: 🧪 Run LDCheck
-        if: ${{ inputs.LDCHECK && success() }}
+        if: ${{ (inputs.LDCHECK || false) && success() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1615,7 +1620,7 @@ jobs:
 
           python3 ldcheck \
             -p system/lib64:vendor/lib64:system/lib:vendor/lib \
-            -d "${{ inputs.LDCHECKPATH }}"
+            -d "${{ inputs.LDCHECKPATH || 'system/bin/qseecomd' }}"
 
           echo "::notice::✅ LDCheck complete"
 
@@ -1631,7 +1636,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH }}-${{ runner.arch }}-${{ github.run_id }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-${{ github.run_id }}
 
       - name: 📊 Report compiler cache statistics
         if: always()
