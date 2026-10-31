@@ -1,6 +1,11 @@
 name: SkyHawk [SHRP]
 
 on:
+  push:
+    branches:
+      - fix-a35-vendor-patch-and-diagnostics
+    paths:
+      - .github/workflows/SkyHawk-SHRP.yml
   workflow_dispatch:
     inputs:
       MANIFEST:
@@ -17,6 +22,12 @@ on:
         options:
           - shrp-12.1
           - shrp-9.0
+
+      DEVICE_TREE_BRANCH:
+        description: 'A35 device-tree branch to compile'
+        required: true
+        default: 'debug/a35x-recovery-startup-baseline-20261030'
+        type: string
 
       BUILD_TARGET:
         description: 'Build Target(s) — separados por coma: recovery,boot,vendor_boot'
@@ -70,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          raw="${{ inputs.BUILD_TARGET }}"
+          raw="${{ inputs.BUILD_TARGET || 'recovery' }}"
 
           if [ -z "$raw" ]; then
             raw="recovery"
@@ -145,7 +156,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: gitgud-crypto-test
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH || 'debug/a35x-recovery-startup-baseline-20261030' }}
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
@@ -165,6 +176,11 @@ jobs:
       # ============================================================
 
       ALLOW_MISSING_DEPENDENCIES: true
+
+      # Persistent compiler cache for faster subsequent Android builds.
+      USE_CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
 
     steps:
 
@@ -188,11 +204,11 @@ jobs:
           echo "=========================================="
 
           echo "Manifest:"
-          echo "${{ inputs.MANIFEST }}"
+          echo "${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}"
 
           echo ""
           echo "Manifest branch:"
-          echo "${{ inputs.MANIFEST_BRANCH }}"
+          echo "${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}"
 
           echo ""
           echo "Device tree:"
@@ -216,7 +232,7 @@ jobs:
 
           echo ""
           echo "LDCheck:"
-          echo "${{ inputs.LDCHECK }}"
+          echo "${{ inputs.LDCHECK || false }}"
 
           echo ""
           echo "=========================================="
@@ -302,6 +318,33 @@ jobs:
           echo "::notice::✅ Base dependencies installed"
 
 
+      # ================================================================
+      # RESTORE COMPILER CACHE
+      # ================================================================
+
+      - name: ♻️ Restore Android compiler cache
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-
+
+      - name: ⚙️ Configure compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache --version
+          ccache --set-config=compiler_check=content
+          ccache --max-size=6G
+          ccache --zero-stats
+          echo "CCACHE_DIR=$CCACHE_DIR"
+          echo "CCACHE_MAXSIZE=6G"
+          ccache --show-stats
+
+
       # ============================================================
       # LEGACY UBUNTU PACKAGES
       # ============================================================
@@ -341,7 +384,7 @@ jobs:
       # ============================================================
 
       - name: 🐍 Configure Python 2.7
-        if: inputs.MANIFEST_BRANCH == 'shrp-12.1'
+        if: ${{ (inputs.MANIFEST_BRANCH || 'shrp-12.1') == 'shrp-12.1' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -417,8 +460,8 @@ jobs:
 
           repo init \
             --depth=1 \
-            -u "${{ inputs.MANIFEST }}" \
-            -b "${{ inputs.MANIFEST_BRANCH }}"
+            -u "${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}" \
+            -b "${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}"
 
           echo "::notice::✅ SHRP repository initialized"
 
@@ -724,6 +767,138 @@ jobs:
 
 
       # ================================================================
+      # ================================================================
+      # PRUNE OPTIONAL CAMERA / NPU / VIDEO MODULES FOR RECOVERY
+      # ================================================================
+
+      - name: ✂️ Prune non-recovery camera and accelerator modules
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          MODULE_DIR="${DEVICE_DIRECTORY}/${DEVICE_NAME}/recovery/root/lib/modules"
+
+          if [ ! -d "$MODULE_DIR" ]; then
+            echo "::error::Recovery module directory not found: $MODULE_DIR"
+            exit 1
+          fi
+
+          # Recovery does not use camera capture, ISP tuning, NPU, or the
+          # hardware video codec. Keep display, touchscreen, USB, Wi-Fi,
+          # storage, fingerprint, TEE and encryption-related modules.
+          EXCLUDED_MODULES=(
+            fimc-is.ko
+            is-cis-3l6.ko
+            is-cis-gn8.ko
+            is-cis-imx882.ko
+            is-cis-hi1339.ko
+            is-cis-gc05a3.ko
+            is-cis-gc08a3.ko
+            is-actuator-ak737x.ko
+            is-flash-sm5714.ko
+            pablo-hws.ko
+            pablo-libs.ko
+            pablo-icpu.ko
+            pablo-self-tests.ko
+            pablo-smc.ko
+            is-device-eeprom.ko
+            is-device-otprom.ko
+            smfc.ko
+            scaler.ko
+            gdc.ko
+            votf.ko
+            npu.ko
+            exynos_mfc.ko
+          )
+
+          EXCLUDED_LIST="$(mktemp)"
+          for module in "${EXCLUDED_MODULES[@]}"; do
+            if [ -f "$MODULE_DIR/$module" ]; then
+              printf '%s\n' "$module" >> "$EXCLUDED_LIST"
+              echo "Removing optional module: $module"
+              rm -f "$MODULE_DIR/$module"
+            else
+              echo "::warning::Optional module not present: $module"
+            fi
+          done
+
+          if [ -f "$MODULE_DIR/modules.load.recovery" ]; then
+            grep -Fvx -f "$EXCLUDED_LIST" "$MODULE_DIR/modules.load.recovery" \
+              > "$MODULE_DIR/modules.load.recovery.tmp" || true
+            mv "$MODULE_DIR/modules.load.recovery.tmp" "$MODULE_DIR/modules.load.recovery"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.dep" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) excluded["/lib/modules/" m] = 1
+              }
+              {
+                colon = index($0, ":")
+                if (!colon) { print; next }
+                target = substr($0, 1, colon - 1)
+                if (target in excluded) next
+                rest = substr($0, colon + 1)
+                count = split(rest, deps, /[[:space:]]+/)
+                output = target ":"
+                for (i = 1; i <= count; i++) {
+                  if (deps[i] != "" && !(deps[i] in excluded)) output = output " " deps[i]
+                }
+                sub(/[[:space:]]+$/, "", output)
+                print output
+              }
+            ' "$MODULE_DIR/modules.dep" > "$MODULE_DIR/modules.dep.tmp"
+            mv "$MODULE_DIR/modules.dep.tmp" "$MODULE_DIR/modules.dep"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.alias" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) {
+                  sub(/\.ko$/, "", m)
+                  gsub(/-/, "_", m)
+                  excluded[m] = 1
+                }
+              }
+              /^#/ { print; next }
+              NF >= 3 && ($NF in excluded) { next }
+              { print }
+            ' "$MODULE_DIR/modules.alias" > "$MODULE_DIR/modules.alias.tmp"
+            mv "$MODULE_DIR/modules.alias.tmp" "$MODULE_DIR/modules.alias"
+          fi
+
+          if [ -f "$MODULE_DIR/modules.softdep" ]; then
+            awk -v list="$EXCLUDED_LIST" '
+              BEGIN {
+                while ((getline m < list) > 0) {
+                  sub(/\.ko$/, "", m)
+                  gsub(/-/, "_", m)
+                  excluded[m] = 1
+                }
+              }
+              /^#/ { print; next }
+              {
+                skip = 0
+                for (i = 1; i <= NF; i++) {
+                  token = $i
+                  sub(/:$/, "", token)
+                  gsub(/-/, "_", token)
+                  if (token in excluded) skip = 1
+                }
+                if (!skip) print
+              }
+            ' "$MODULE_DIR/modules.softdep" > "$MODULE_DIR/modules.softdep.tmp"
+            mv "$MODULE_DIR/modules.softdep.tmp" "$MODULE_DIR/modules.softdep"
+          fi
+
+          rm -f "$EXCLUDED_LIST"
+
+          echo "Remaining module files: $(find "$MODULE_DIR" -maxdepth 1 -type f -name '*.ko' | wc -l)"
+          echo "Remaining recovery load entries: $(wc -l < "$MODULE_DIR/modules.load.recovery")"
+          echo "::notice::Optional camera/ISP/NPU/video modules pruned; touch, display, USB, storage and TEE modules preserved"
+
+
       # VERIFY PRODUCT MAKEFILE
       # ================================================================
 
@@ -763,23 +938,15 @@ jobs:
 
 
       # ================================================================
-      # FIX DUPLICATE VENDOR SECURITY PATCH (ROOT CAUSE)
+      # FIX SYSTEM AND VENDOR SECURITY PATCH PROPERTIES
       # ================================================================
       #
-      # The core AOSP build system always emits a
-      # "ro.vendor.build.security_patch=$(BOARD_SECURITY_PATCH)" line for
-      # the vendor partition. When BoardConfig.mk does not define
-      # BOARD_SECURITY_PATCH, that line is emitted EMPTY. If the device
-      # tree's vendor.prop *also* hardcodes ro.vendor.build.security_patch,
-      # post_process_props sees two assignments for the same key and
-      # fails the build ("found duplicate sysprop assignments"), even
-      # though neither file alone is empty/invalid.
-      #
-      # Fix: make BOARD_SECURITY_PATCH the single source of truth by
-      # setting it in BoardConfig.mk, and drop the hardcoded line from
-      # vendor.prop so only one assignment reaches build.prop.
+      # BOARD_SECURITY_PATCH and VENDOR_SECURITY_PATCH are separate:
+      # the former is used for the system patch level, the latter for
+      # ro.vendor.build.security_patch. Keep both aligned to the A35
+      # firmware patch level and remove the duplicate vendor.prop entry.
 
-      - name: 🩹 Fix duplicate vendor security patch
+      - name: 🩹 Fix system and vendor security patch properties
         shell: bash
         run: |
           set -euo pipefail
@@ -798,24 +965,32 @@ jobs:
 
           if [ -n "$VENDOR_PROP" ] && [ -f "$VENDOR_PROP" ]; then
             if grep -qE '^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=' "$VENDOR_PROP"; then
-              echo "::notice::Removing hardcoded ro.vendor.build.security_patch from $VENDOR_PROP"
+              echo "::notice::Removing duplicate ro.vendor.build.security_patch from $VENDOR_PROP"
               sed -i '/^[[:space:]]*ro\.vendor\.build\.security_patch[[:space:]]*=/d' "$VENDOR_PROP"
             fi
           fi
 
-          if [ -f "$BOARD_CONFIG" ]; then
-            if grep -qE '^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"; then
-              echo "::notice::Updating existing BOARD_SECURITY_PATCH in $BOARD_CONFIG"
-              sed -i "s|^[[:space:]]*BOARD_SECURITY_PATCH[[:space:]]*:=.*|BOARD_SECURITY_PATCH := ${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
-            else
-              echo "::notice::Adding BOARD_SECURITY_PATCH to $BOARD_CONFIG"
-              printf '\nBOARD_SECURITY_PATCH := %s\n' "${EXPECTED_VENDOR_SECURITY_PATCH}" >> "$BOARD_CONFIG"
-            fi
-          else
-            echo "::warning::BoardConfig.mk not found at $BOARD_CONFIG"
+          if [ ! -f "$BOARD_CONFIG" ]; then
+            echo "::error::BoardConfig.mk not found: $BOARD_CONFIG"
+            exit 1
           fi
 
-          echo "::notice::✅ Vendor security patch now sourced solely from BOARD_SECURITY_PATCH"
+          set_make_var() {
+            local variable="$1"
+            if grep -qE "^[[:space:]]*${variable}[[:space:]]*:=" "$BOARD_CONFIG"; then
+              sed -i "s|^[[:space:]]*${variable}[[:space:]]*:=.*|${variable} := ${EXPECTED_VENDOR_SECURITY_PATCH}|" "$BOARD_CONFIG"
+            else
+              printf '\n%s := %s\n' "$variable" "$EXPECTED_VENDOR_SECURITY_PATCH" >> "$BOARD_CONFIG"
+            fi
+          }
+
+          set_make_var BOARD_SECURITY_PATCH
+          set_make_var VENDOR_SECURITY_PATCH
+
+          echo "Resolved patch variables:"
+          grep -nE '^[[:space:]]*(BOARD|VENDOR)_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"
+
+          echo "::notice::System and vendor patch levels set to ${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
@@ -946,6 +1121,29 @@ jobs:
             echo "::warning::Expected vendor security patch not found."
 
           fi
+
+
+      # ================================================================
+      # VALIDATE VENDOR SECURITY PATCH VARIABLE
+      # ================================================================
+
+      - name: 🔐 Validate VENDOR_SECURITY_PATCH
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          BOARD_CONFIG="$DEVICE_DIRECTORY/$DEVICE_NAME/BoardConfig.mk"
+
+          if ! grep -qE \
+            "^[[:space:]]*VENDOR_SECURITY_PATCH[[:space:]]*:=[[:space:]]*${EXPECTED_VENDOR_SECURITY_PATCH}[[:space:]]*$" \
+            "$BOARD_CONFIG"; then
+            echo "::error::VENDOR_SECURITY_PATCH does not match the expected A35 firmware patch."
+            grep -nE '^[[:space:]]*VENDOR_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG" || true
+            exit 1
+          fi
+
+          echo "::notice::VENDOR_SECURITY_PATCH matches ${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
@@ -1221,6 +1419,89 @@ jobs:
 
 
       # ================================================================
+      # RECOVERY SIZE DIAGNOSTICS (FAILURE ONLY)
+      # ================================================================
+
+      - name: 📏 Collect recovery image size details
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+
+          cd android-recovery
+          PRODUCT_DIR="out/target/product/${DEVICE_NAME:-a35x}"
+          REPORT="${GITHUB_WORKSPACE}/shrp-recovery-size-report.txt"
+
+          {
+            echo "SHRP recovery size diagnostics"
+            echo "Device: ${DEVICE_NAME:-unknown}"
+            echo "Device tree branch: ${DEVICE_TREE_BRANCH}"
+            echo "Device tree commit: ${COMMIT_ID:-unknown}"
+            echo "Expected vendor patch: ${EXPECTED_VENDOR_SECURITY_PATCH}"
+            echo ""
+
+            for file in \
+              "$PRODUCT_DIR/recovery.img" \
+              "$PRODUCT_DIR/kernel" \
+              "$PRODUCT_DIR/ramdisk-recovery.img" \
+              "$DEVICE_DIRECTORY/$DEVICE_NAME/prebuilt/dtb.img" \
+              "$DEVICE_DIRECTORY/$DEVICE_NAME/prebuilt/dtbo.img" \
+              "$PRODUCT_DIR/installed-files-ramdisk.txt" \
+              "$PRODUCT_DIR/vendor/build.prop" \
+              "$PRODUCT_DIR/recovery/root/prop.default"; do
+              if [ -f "$file" ]; then
+                stat -c '%s bytes | %n' "$file"
+              else
+                echo "MISSING | $file"
+              fi
+            done
+
+            echo ""
+            echo "Recovery module inventory:"
+            MODULE_DIR="$DEVICE_DIRECTORY/$DEVICE_NAME/recovery/root/lib/modules"
+            if [ -d "$MODULE_DIR" ]; then
+              echo "Module files: $(find "$MODULE_DIR" -maxdepth 1 -type f -name '*.ko' | wc -l)"
+              echo "Module load entries: $(wc -l < "$MODULE_DIR/modules.load.recovery" 2>/dev/null || echo 0)"
+              du -ch "$MODULE_DIR"/*.ko 2>/dev/null | tail -n 1 || true
+            fi
+
+            echo ""
+            echo "Largest files in generated recovery ramdisk:"
+            if [ -d "$PRODUCT_DIR/recovery/root" ]; then
+              find "$PRODUCT_DIR/recovery/root" -type f -printf '%s\t%p\n' \
+                | sort -nr | head -n 100
+            fi
+
+            echo ""
+            echo "Largest installed ramdisk entries:"
+            if [ -f "$PRODUCT_DIR/installed-files-ramdisk.txt" ]; then
+              sort -nr "$PRODUCT_DIR/installed-files-ramdisk.txt" | head -n 100
+            fi
+
+            echo ""
+            echo "Generated security patch properties:"
+            grep -n 'security_patch' "$PRODUCT_DIR/vendor/build.prop" "$PRODUCT_DIR/recovery/root/prop.default" 2>/dev/null || true
+          } > "$REPORT"
+
+          cat "$REPORT"
+
+
+      - name: 📤 Upload recovery diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shrp-recovery-diagnostics-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            shrp-recovery-size-report.txt
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.img
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/installed-files-ramdisk.txt
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/vendor/build.prop
+            android-recovery/out/target/product/${{ env.DEVICE_NAME }}/recovery/root/prop.default
+          if-no-files-found: warn
+          retention-days: 7
+
+
+      # ================================================================
       # BUILD METADATA
       # ================================================================
 
@@ -1273,10 +1554,10 @@ jobs:
             Target: ${{ matrix.target }}
 
             Manifest:
-            ${{ inputs.MANIFEST }}
+            ${{ inputs.MANIFEST || 'https://github.com/SHRP-Reborn/manifest.git' }}
 
             Manifest branch:
-            ${{ inputs.MANIFEST_BRANCH }}
+            ${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}
 
             Device Tree:
             ${{ env.DEVICE_TREE }}
@@ -1299,7 +1580,7 @@ jobs:
       # ================================================================
 
       - name: 🧪 Run LDCheck
-        if: ${{ inputs.LDCHECK && success() }}
+        if: ${{ (inputs.LDCHECK || false) && success() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1339,11 +1620,32 @@ jobs:
 
           python3 ldcheck \
             -p system/lib64:vendor/lib64:system/lib:vendor/lib \
-            -d "${{ inputs.LDCHECKPATH }}"
+            -d "${{ inputs.LDCHECKPATH || 'system/bin/qseecomd' }}"
 
           echo "::notice::✅ LDCheck complete"
 
         continue-on-error: true
+
+
+      # ================================================================
+      # SAVE COMPILER CACHE
+      # ================================================================
+
+      - name: 💾 Save Android compiler cache
+        if: always() && steps.ccache-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-shrp-${{ inputs.MANIFEST_BRANCH || 'shrp-12.1' }}-${{ runner.arch }}-${{ github.run_id }}
+
+      - name: 📊 Report compiler cache statistics
+        if: always()
+        shell: bash
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            echo "Final compiler cache statistics:"
+            ccache --show-stats
+          fi
 
 
       # ================================================================
