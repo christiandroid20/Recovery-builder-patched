@@ -1007,13 +1007,18 @@ jobs:
             fi
           }
 
+          # Keep all build-time patch levels aligned with the stock A35
+          # firmware baseline. PLATFORM_SECURITY_PATCH also feeds mkbootimg
+          # --os_patch_level; changing only BOARD/VENDOR leaves 2099-12-31.
+          set_make_var PLATFORM_SECURITY_PATCH
+          set_make_var BOOT_SECURITY_PATCH
           set_make_var BOARD_SECURITY_PATCH
           set_make_var VENDOR_SECURITY_PATCH
 
           echo "Resolved patch variables:"
-          grep -nE '^[[:space:]]*(BOARD|VENDOR)_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"
+          grep -nE '^[[:space:]]*(PLATFORM|BOOT|BOARD|VENDOR)_SECURITY_PATCH[[:space:]]*:=' "$BOARD_CONFIG"
 
-          echo "::notice::System and vendor patch levels set to ${EXPECTED_VENDOR_SECURITY_PATCH}"
+          echo "::notice::Platform, boot, board and vendor patch levels set to ${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
@@ -1167,6 +1172,15 @@ jobs:
           fi
 
           echo "::notice::VENDOR_SECURITY_PATCH matches ${EXPECTED_VENDOR_SECURITY_PATCH}"
+
+          for variable in PLATFORM_SECURITY_PATCH BOOT_SECURITY_PATCH BOARD_SECURITY_PATCH; do
+            if ! grep -qE "^[[:space:]]*${variable}[[:space:]]*:=[[:space:]]*${EXPECTED_VENDOR_SECURITY_PATCH}[[:space:]]*$" "$BOARD_CONFIG"; then
+              echo "::error::${variable} does not match the stock A35 firmware patch."
+              grep -nE "^[[:space:]]*${variable}[[:space:]]*:=" "$BOARD_CONFIG" || true
+              exit 1
+            fi
+          done
+          echo "::notice::All platform, boot, board and vendor patch variables match ${EXPECTED_VENDOR_SECURITY_PATCH}"
 
 
       # ================================================================
