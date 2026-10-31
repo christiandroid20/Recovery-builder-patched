@@ -1,6 +1,11 @@
 name: SkyHawk [SHRP]
 
 on:
+  push:
+    branches:
+      - feature/gsi-manager-build-20261031
+    paths:
+      - .github/workflows/SkyHawk-SHRP.yml
   workflow_dispatch:
     inputs:
       MANIFEST:
