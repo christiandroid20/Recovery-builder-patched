@@ -852,6 +852,76 @@ jobs:
           echo "::notice::Optional camera/ISP/NPU/video modules pruned; touch, display, USB, storage and TEE modules preserved"
 
 
+      # ================================================================
+      # VALIDATE BASE C CRITICAL COMPONENTS
+      # ================================================================
+
+      - name: 🧪 Validate BASE C flash, crypto and storage inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          DEVICE_PATH="$DEVICE_DIRECTORY/$DEVICE_NAME"
+          MODULE_DIR="$DEVICE_PATH/recovery/root/lib/modules"
+          LOAD_LIST="$MODULE_DIR/modules.load.recovery"
+          MODULE_DEPS="$MODULE_DIR/modules.dep"
+          FSTAB="$DEVICE_PATH/recovery.fstab"
+          TEE_RC="$DEVICE_PATH/recovery/root/init.recovery.teegris.rc"
+
+          echo "=== Flashlight modules ==="
+          REQUIRED_MODULES=(
+            fimc-is.ko
+            is-flash-sm5714.ko
+            leds-sm5714-fled.ko
+            pablo-hws.ko
+            pablo-libs.ko
+            pablo-icpu.ko
+            pablo-smc.ko
+            votf.ko
+          )
+
+          for module in "${REQUIRED_MODULES[@]}"; do
+            test -s "$MODULE_DIR/$module" || {
+              echo "::error::Required BASE C module missing: $module"
+              exit 1
+            }
+            grep -Fxq "$module" "$LOAD_LIST" || {
+              echo "::error::Required BASE C module not in modules.load.recovery: $module"
+              exit 1
+            }
+            echo "OK: $module"
+          done
+
+          echo "=== Storage fstab (read-only validation) ==="
+          DATA_LINE="$(awk '$2 == "/data" { print; exit }' "$FSTAB")"
+          META_LINE="$(awk '$2 == "/metadata" { print; exit }' "$FSTAB")"
+
+          echo "$DATA_LINE"
+          echo "$META_LINE"
+
+          echo "$DATA_LINE" | grep -q ' f2fs ' || {
+            echo "::error::/data must remain configured as F2FS; refusing an unreviewed change."
+            exit 1
+          }
+          echo "$DATA_LINE" | grep -q 'formattable' && {
+            echo "::error::Unexpected formattable flag on /data; refusing destructive configuration."
+            exit 1
+          } || true
+          echo "$META_LINE" | grep -q ' ext4 ' || {
+            echo "::error::/metadata must remain configured as ext4."
+            exit 1
+          }
+
+          echo "=== TEEGRIS / Gatekeeper environment ==="
+          grep -q 'service tz_service /vendor/bin/tzdaemon' "$TEE_RC"
+          grep -q 'service tzts_service /vendor/bin/tzts_daemon' "$TEE_RC"
+          grep -q 'service vendor.keymint-default ' "$TEE_RC"
+          grep -A5 'service vendor.gatekeeper-1-0 ' "$TEE_RC" | grep -q 'setenv LD_LIBRARY_PATH'
+
+          echo "::notice::BASE C critical module, storage and TEE configuration checks passed."
+
+
       # VERIFY PRODUCT MAKEFILE
       # ================================================================
 
