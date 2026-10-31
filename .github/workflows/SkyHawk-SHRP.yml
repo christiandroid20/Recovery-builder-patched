@@ -157,7 +157,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH || 'debug/a35x-recovery-startup-baseline-20261030' }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH || 'feature/gsi-manager-a35x-20261031' }}
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
