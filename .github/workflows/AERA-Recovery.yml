@@ -1,65 +1,112 @@
 
-name: AERA Recovery Builder - Galaxy A35x
+name: AERA Recovery [A35x]
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - shrp-12.1
-    tags:
-      - "aera-*"
+    inputs:
+      MANIFEST_BRANCH:
+        description: AERA Android manifest branch
+        required: true
+        default: aera-16.0
+        type: choice
+        options:
+          - aera-16.0
+
+      DEVICE_TREE:
+        description: Device tree repository
+        required: true
+        default: https://github.com/christiandroid20/shrp_device_samsung_a35x
+
+      DEVICE_TREE_BRANCH:
+        description: Device tree branch
+        required: true
+        default: shrp-12.1
+
+      BUILD_TARGET:
+        description: Recovery image target
+        required: true
+        default: recoveryimage
+        type: choice
+        options:
+          - recoveryimage
+
+      RELEASE:
+        description: Publish GitHub Release
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: aera-a35x-${{ github.ref }}
+  group: aera-a35x-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build AERA Recovery
-    runs-on: [self-hosted, Linux, X64, aera-builder]
+    name: Build AERA A35x
+    runs-on: ubuntu-22.04
     timeout-minutes: 720
 
     env:
-      MANIFEST_BRANCH: aera-16.0
-      DEVICE_BRANCH: shrp-12.1
-      DEVICE_PATH: device/samsung/a35x
-      DEVICE_CODE: a35x
-      BUILD_TARGET: omni_a35x-eng
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
+      DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      WORK_DIR: ${{ github.workspace }}/AERA
 
     steps:
-      - name: Checkout builder repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure build environment
+      - name: Free runner space
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: Configure swap
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 16
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
-            git-core git-lfs curl wget \
+            git git-lfs curl wget aria2 \
             python3 python-is-python3 \
+            openjdk-17-jdk \
             bc bison build-essential \
             flex g++-multilib gcc-multilib \
             libncurses-dev libssl-dev \
-            libxml2-utils unzip zip \
-            rsync ccache zlib1g-dev \
-            openjdk-17-jdk
+            libxml2-utils xsltproc \
+            zlib1g-dev liblz4-tool lz4 \
+            zip unzip rsync ccache \
+            lib32z1-dev lib32ncurses-dev \
+            libelf-dev libxml2-dev \
+            pngcrush schedtool \
+            squashfs-tools
 
-      - name: Install Repo tool
+      - name: Install Repo
         run: |
           mkdir -p "$HOME/bin"
+
           curl -fsSL \
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o "$HOME/bin/repo"
-          chmod a+x "$HOME/bin/repo"
+
+          chmod +x "$HOME/bin/repo"
+
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Initialize AERA Android 16
+      - name: Initialize AERA manifest
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/AERA_16.0"
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          mkdir -p "$WORK_DIR"
+          cd "$WORK_DIR"
+
+          git config --global user.name "AERA Builder"
+          git config --global user.email \
+            "github-actions[bot]@users.noreply.github.com"
 
           repo init \
             -u https://github.com/AERA-Recovery/android_manifest.git \
@@ -67,72 +114,123 @@ jobs:
 
       - name: Sync AERA sources
         run: |
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$WORK_DIR"
 
-          repo sync -c \
+          repo sync \
+            -c \
             --force-sync \
             --no-clone-bundle \
             --no-tags \
             -j4
 
-      - name: Clone Samsung A35x device tree
+      - name: Clone A35x device tree
         run: |
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$WORK_DIR"
 
           git clone \
             --depth=1 \
-            -b "$DEVICE_BRANCH" \
-            https://github.com/christiandroid20/shrp_device_samsung_a35x.git \
-            "$DEVICE_PATH"
+            -b "$DEVICE_TREE_BRANCH" \
+            "$DEVICE_TREE" \
+            device_tree
 
-      - name: Verify device files and kernel
+          cd device_tree
+
+          echo "DEVICE_COMMIT=$(git rev-parse HEAD)" \
+            >> "$GITHUB_ENV"
+
+      - name: Configure A35x AERA product
+        shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$WORK_DIR"
 
-          test -f "$DEVICE_PATH/AndroidProducts.mk"
-          test -f "$DEVICE_PATH/BoardConfig.mk"
-          test -f "$DEVICE_PATH/prebuilt/Image"
-          test -f "$DEVICE_PATH/prebuilt/dtb.img"
-          test -f "$DEVICE_PATH/prebuilt/dtbo.img"
+          TREE=device/samsung/a35x
 
-          echo "Device tree verified"
-          echo "Kernel version:"
-          strings "$DEVICE_PATH/prebuilt/Image" |
-            grep -m1 "Linux version" || true
+          mkdir -p device/samsung
+
+          mv device_tree "$TREE"
+
+          cd "$TREE"
+
+          test -f AndroidProducts.mk
+          test -f BoardConfig.mk
+          test -f omni_a35x.mk
+
+          # Preserve the original SHRP product.
+          cp omni_a35x.mk twrp_a35x.mk
+
+          # Register the AERA/TWRP Android 16 product.
+          sed -i \
+            's/omni_a35x.mk/twrp_a35x.mk/g' \
+            AndroidProducts.mk
+
+          sed -i \
+            's/omni_a35x-eng/twrp_a35x-bp2a-eng/g' \
+            AndroidProducts.mk
+
+          sed -i \
+            's/PRODUCT_NAME := omni_a35x/PRODUCT_NAME := twrp_a35x/' \
+            twrp_a35x.mk
+
+          # Verify prebuilt kernel components.
+          test -f prebuilt/Image
+          test -f prebuilt/dtb.img
+          test -f prebuilt/dtbo.img
+
+          echo "A35x product configured"
+          echo "Kernel information:"
+          strings prebuilt/Image | grep -m1 "Linux version" || true
+
+          echo "Device tree commit: $DEVICE_COMMIT"
 
       - name: Build AERA Recovery
         shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$WORK_DIR"
 
           export ALLOW_MISSING_DEPENDENCIES=true
-          export AERA_BUILD_DEVICE=a35x
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+
+          ccache -M 5G
 
           source build/envsetup.sh
-          lunch "$BUILD_TARGET"
 
-          mka adbd recoveryimage
+          lunch twrp_a35x-bp2a-eng
 
-      - name: Collect recovery images
+          mka -j4 adbd "$BUILD_TARGET"
+
+      - name: Collect recovery output
         if: success()
+        shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$WORK_DIR"
+
+          OUT="out/target/product/a35x"
+
+          test -d "$OUT"
 
           mkdir -p "$GITHUB_WORKSPACE/dist"
 
-          find "out/target/product/$DEVICE_CODE" \
-            -maxdepth 2 -type f \
-            \( -name "*.img" -o -name "*.tar" \
-               -o -name "*.zip" \) \
+          find "$OUT" -maxdepth 2 -type f \
+            \( -name "recovery.img" \
+            -o -name "recovery.tar" \
+            -o -name "ramdisk-recovery.*" \) \
             -exec cp -v {} "$GITHUB_WORKSPACE/dist/" \;
 
-          test -n "$(find "$GITHUB_WORKSPACE/dist" \
-            -maxdepth 1 -name '*.img' -print -quit)"
+          if ! find "$GITHUB_WORKSPACE/dist" \
+            -name "*.img" -print -quit | grep -q .; then
+            echo "Recovery image not found"
+            exit 1
+          fi
 
-          cd "$GITHUB_WORKSPACE"
-          sha256sum dist/* > dist/SHA256SUMS.txt
+          cd "$GITHUB_WORKSPACE/dist"
 
-      - name: Upload build artifacts
+          sha256sum * > SHA256SUMS.txt
+
+          echo "Build artifacts:"
+          ls -lh
+
+      - name: Upload GitHub Actions artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -141,10 +239,33 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Set build information
+        if: success()
+        run: |
+          echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)" \
+            >> "$GITHUB_ENV"
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/aera-')
+        if: success() && inputs.RELEASE == true
         uses: softprops/action-gh-release@v2
         with:
-          name: AERA Recovery A35x ${{ github.ref_name }}
+          tag_name: AERA-A35x-${{ github.run_number }}
+          name: AERA Recovery A35x - ${{ github.run_number }}
           files: dist/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          body: |
+            # AERA Recovery - Samsung Galaxy A35x
+
+            - Android manifest: ${{ inputs.MANIFEST_BRANCH }}
+            - Device: Samsung Galaxy A35 5G
+            - Codename: a35x
+            - Device tree: ${{ inputs.DEVICE_TREE }}
+            - Device branch: ${{ inputs.DEVICE_TREE_BRANCH }}
+            - Device commit: ${{ env.DEVICE_COMMIT }}
+            - Build date: ${{ env.BUILD_DATE }}
+
+            Kernel: device tree prebuilt/Image
+            Build target: recoveryimage
+
+            SHA256 checksums included.
