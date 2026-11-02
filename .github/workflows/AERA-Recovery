@@ -1,0 +1,150 @@
+
+name: AERA Recovery Builder - Galaxy A35x
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - shrp-12.1
+    tags:
+      - "aera-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aera-a35x-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build AERA Recovery
+    runs-on: [self-hosted, Linux, X64, aera-builder]
+    timeout-minutes: 720
+
+    env:
+      MANIFEST_BRANCH: aera-16.0
+      DEVICE_BRANCH: shrp-12.1
+      DEVICE_PATH: device/samsung/a35x
+      DEVICE_CODE: a35x
+      BUILD_TARGET: omni_a35x-eng
+
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+
+      - name: Configure build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git-core git-lfs curl wget \
+            python3 python-is-python3 \
+            bc bison build-essential \
+            flex g++-multilib gcc-multilib \
+            libncurses-dev libssl-dev \
+            libxml2-utils unzip zip \
+            rsync ccache zlib1g-dev \
+            openjdk-17-jdk
+
+      - name: Install Repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod a+x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize AERA Android 16
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/AERA_16.0"
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          repo init \
+            -u https://github.com/AERA-Recovery/android_manifest.git \
+            -b "$MANIFEST_BRANCH"
+
+      - name: Sync AERA sources
+        run: |
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          repo sync -c \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            -j4
+
+      - name: Clone Samsung A35x device tree
+        run: |
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          git clone \
+            --depth=1 \
+            -b "$DEVICE_BRANCH" \
+            https://github.com/christiandroid20/shrp_device_samsung_a35x.git \
+            "$DEVICE_PATH"
+
+      - name: Verify device files and kernel
+        run: |
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          test -f "$DEVICE_PATH/AndroidProducts.mk"
+          test -f "$DEVICE_PATH/BoardConfig.mk"
+          test -f "$DEVICE_PATH/prebuilt/Image"
+          test -f "$DEVICE_PATH/prebuilt/dtb.img"
+          test -f "$DEVICE_PATH/prebuilt/dtbo.img"
+
+          echo "Device tree verified"
+          echo "Kernel version:"
+          strings "$DEVICE_PATH/prebuilt/Image" |
+            grep -m1 "Linux version" || true
+
+      - name: Build AERA Recovery
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export AERA_BUILD_DEVICE=a35x
+
+          source build/envsetup.sh
+          lunch "$BUILD_TARGET"
+
+          mka adbd recoveryimage
+
+      - name: Collect recovery images
+        if: success()
+        run: |
+          cd "$GITHUB_WORKSPACE/AERA_16.0"
+
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+          find "out/target/product/$DEVICE_CODE" \
+            -maxdepth 2 -type f \
+            \( -name "*.img" -o -name "*.tar" \
+               -o -name "*.zip" \) \
+            -exec cp -v {} "$GITHUB_WORKSPACE/dist/" \;
+
+          test -n "$(find "$GITHUB_WORKSPACE/dist" \
+            -maxdepth 1 -name '*.img' -print -quit)"
+
+          cd "$GITHUB_WORKSPACE"
+          sha256sum dist/* > dist/SHA256SUMS.txt
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AERA-Recovery-A35x
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/aera-')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AERA Recovery A35x ${{ github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
