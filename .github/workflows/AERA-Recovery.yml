@@ -191,6 +191,10 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
 
+          export GOMAXPROCS=2
+          export GOGC=50
+          export GOMEMLIMIT=4GiB
+
           ccache -M 5G
 
           echo "Java version:"
@@ -229,11 +233,11 @@ jobs:
               if [ -r /sys/fs/cgroup/memory.events ]; then
                 cat /sys/fs/cgroup/memory.events
               fi
-              sleep 30
+              sleep 15
             done
           }
 
-          mka -j4 adbd "$BUILD_TARGET" &
+          mka -j2 adbd "$BUILD_TARGET" &
           BUILD_PID=$!
           monitor_resources &
           MONITOR_PID=$!
