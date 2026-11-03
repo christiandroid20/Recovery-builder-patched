@@ -193,6 +193,13 @@ jobs:
 
           ccache -M 5G
 
+          echo "Java version:"
+          java -version
+          java -version 2>&1 | grep -q 'version "21' || {
+            echo "Expected JDK 21 for Android 16 AERA build"
+            exit 1
+          }
+
           source build/envsetup.sh
 
           lunch twrp_a35x-bp2a-eng
