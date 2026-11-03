@@ -1419,6 +1419,36 @@ jobs:
 
 
       # ================================================================
+      # RECOVERY PARTITION SIZE GUARD
+      # ================================================================
+
+      - name: 📏 Enforce A35x recovery partition limit
+        if: success() && matrix.target == 'recovery'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="android-recovery/out/target/product/${DEVICE_NAME}/recovery.img"
+          LIMIT=100663296
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "::error::recovery.img was not generated."
+            exit 1
+          fi
+
+          SIZE="$(stat -c '%s' "$IMAGE")"
+          echo "Recovery image: $SIZE bytes"
+          echo "Partition limit: $LIMIT bytes"
+          echo "Remaining margin: $((LIMIT - SIZE)) bytes"
+
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::recovery.img exceeds the 96 MiB A35x recovery partition."
+            exit 1
+          fi
+
+          echo "::notice::Recovery image fits the configured A35x partition."
+
+      # ================================================================
       # GENERATED PROPERTIES
       # ================================================================
 
