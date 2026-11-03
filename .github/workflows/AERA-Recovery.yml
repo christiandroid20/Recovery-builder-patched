@@ -103,7 +103,7 @@ jobs:
           sudo apt-get install -y \
             git git-lfs curl wget aria2 \
             python3 python-is-python3 \
-            openjdk-17-jdk \
+            openjdk-21-jdk \
             bc bison build-essential \
             flex g++-multilib gcc-multilib \
             libncurses-dev libssl-dev \
@@ -221,11 +221,69 @@ jobs:
 
           ccache -M 5G
 
-          source build/envsetup.sh
+          # Android 16 AERA uses JDK 21. Bound Go/Soong memory and Ninja
+          # concurrency for the hosted runner instead of relying on -j4.
+          export GOMAXPROCS=2
+          export GOGC=50
+          export GOMEMLIMIT=4GiB
 
+          echo "Java version:"
+          java -version
+          java -version 2>&1 | grep -q 'version "21' || {
+            echo "Expected JDK 21 for Android 16 AERA build"
+            exit 1
+          }
+
+          source build/envsetup.sh
           lunch twrp_a35x-bp2a-eng
 
-          mka -j4 adbd "$BUILD_TARGET"
+          dump_memory_state() {
+            echo "=== MEMORY DIAGNOSTICS $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+            free -h || true
+            swapon --show || true
+            grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo || true
+            [ ! -r /proc/pressure/memory ] || cat /proc/pressure/memory
+            for f in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; do
+              if [ -r "$f" ]; then echo "--- $f"; cat "$f"; fi
+            done
+          }
+
+          dump_memory_state
+
+          monitor_resources() {
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              echo "=== RESOURCE SAMPLE $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              free -h
+              grep -E 'MemAvailable|SwapFree' /proc/meminfo || true
+              [ ! -r /proc/pressure/memory ] || cat /proc/pressure/memory
+              [ ! -r /sys/fs/cgroup/memory.events ] || cat /sys/fs/cgroup/memory.events
+              sleep 15
+            done
+          }
+
+          on_build_signal() {
+            echo "Build shell received $1"
+            dump_memory_state
+            exit 143
+          }
+          trap 'on_build_signal SIGTERM' TERM
+          trap 'on_build_signal SIGINT' INT
+
+          mka -j2 adbd "$BUILD_TARGET" &
+          BUILD_PID=$!
+          monitor_resources &
+          MONITOR_PID=$!
+
+          set +e
+          wait "$BUILD_PID"
+          BUILD_STATUS=$?
+          kill "$MONITOR_PID" 2>/dev/null || true
+          wait "$MONITOR_PID" 2>/dev/null || true
+          set -e
+
+          dump_memory_state
+          echo "Build exit status: $BUILD_STATUS"
+          exit "$BUILD_STATUS"
 
       - name: Collect recovery output
         if: success()
