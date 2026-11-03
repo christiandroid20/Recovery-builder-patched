@@ -36,6 +36,34 @@ on:
         default: 'system/bin/qseecomd'
         type: string
 
+      RELEASE_LABEL:
+        description: 'Short test label shown in the GitHub Release title'
+        required: true
+        default: 'TEST - build only'
+        type: string
+
+      DATA_STATUS:
+        description: 'Data decryption validation (change only after testing on device)'
+        required: true
+        default: 'Not tested'
+        type: choice
+        options:
+          - 'Not tested'
+          - 'Tested - working'
+          - 'Tested - failing'
+
+      CHANGELOG:
+        description: 'Changes included in this recovery image'
+        required: false
+        default: 'SHRP A35x test build'
+        type: string
+
+      EXTRA_FEATURES:
+        description: 'Extra functions verified on the device'
+        required: false
+        default: 'None verified yet'
+        type: string
+
 
 # ================================================================
 # GLOBAL PERMISSIONS
@@ -1555,9 +1583,9 @@ jobs:
       # RELEASE
       # ================================================================
 
-      - name: 📤 Upload build to GitHub Release
+      - name: 📤 Publish TEST build to GitHub Release
         if: success()
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v2
         with:
 
           files: |
@@ -1565,12 +1593,20 @@ jobs:
             android-recovery/out/target/product/${{ env.DEVICE_NAME }}/SHRP*.zip
             android-recovery/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
 
-          name: Unofficial SHRP for ${{ env.DEVICE_NAME }} — ${{ matrix.target }}
+          name: '[TEST] SHRP ${{ env.DEVICE_NAME }} — ${{ matrix.target }} — ${{ inputs.RELEASE_LABEL }}'
 
-          tag_name: shrp-${{ env.BUILD_DATE }}-${{ matrix.target }}
+          tag_name: shrp-test-${{ github.run_id }}-${{ matrix.target }}
+          prerelease: true
+          generate_release_notes: true
 
           body: |
-            # Unofficial SHRP
+            # TEST BUILD — Unofficial SHRP
+
+            **Validation:** TEST / prerelease. Not an official stable release.
+            **Data decryption:** ${{ inputs.DATA_STATUS }}
+            **Changes in this image:** ${{ inputs.CHANGELOG }}
+            **Additional verified features:** ${{ inputs.EXTRA_FEATURES }}
+            **GitHub run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             Device: ${{ env.DEVICE_NAME }}
 
