@@ -191,6 +191,11 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
 
+          # Keep Go/Soong memory use bounded on the hosted runner.
+          export GOMAXPROCS=2
+          export GOGC=50
+          export GOMEMLIMIT=4GiB
+
           ccache -M 5G
 
           echo "Java version:"
@@ -216,6 +221,26 @@ jobs:
             fi
           done
 
+          dump_memory_state() {
+            echo "=== MEMORY DIAGNOSTICS $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+            free -h || true
+            swapon --show || true
+            grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo || true
+            if [ -r /proc/pressure/memory ]; then cat /proc/pressure/memory; fi
+            for f in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max; do
+              if [ -r "$f" ]; then echo "--- $f"; cat "$f"; fi
+            done
+          }
+
+          on_build_signal() {
+            signal="$1"
+            echo "Build shell received $signal"
+            dump_memory_state
+            exit 143
+          }
+          trap 'on_build_signal SIGTERM' TERM
+          trap 'on_build_signal SIGINT' INT
+
           # Keep a periodic resource trace while Soong/Ninja runs. This helps
           # distinguish OOM pressure from an external GitHub Actions cancellation.
           monitor_resources() {
@@ -229,11 +254,12 @@ jobs:
               if [ -r /sys/fs/cgroup/memory.events ]; then
                 cat /sys/fs/cgroup/memory.events
               fi
-              sleep 30
+              sleep 15
             done
           }
 
-          mka -j4 adbd "$BUILD_TARGET" &
+          # Conservative test: lower Ninja parallelism and bound Go heap.
+          mka -j2 adbd "$BUILD_TARGET" &
           BUILD_PID=$!
           monitor_resources &
           MONITOR_PID=$!
