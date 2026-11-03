@@ -173,7 +173,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: build-c-original
+      DEVICE_TREE_BRANCH: shrp-a35x-teegris-fix
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
@@ -752,6 +752,44 @@ jobs:
 
 
       # ================================================================
+      # ================================================================
+      # VERIFY A35X TEEGRIS EXTRACTOR
+      # ================================================================
+
+      - name: 🛡️ Validate A35x TEEGRIS trustlet extractor
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd android-recovery
+          EXTRACTOR="$DEVICE_DIRECTORY/$DEVICE_NAME/recovery/root/vendor/bin/extract_ta.sh"
+
+          test -s "$EXTRACTOR" || {
+            echo "::error::A35x TEEGRIS extractor is missing"
+            exit 1
+          }
+
+          sh -n "$EXTRACTOR"
+
+          if grep -qiE 'SM-A54|A54|tee_sea|tee_eur' "$EXTRACTOR"; then
+            echo "::error::Legacy A54-specific TEE paths remain in extract_ta.sh"
+            exit 1
+          fi
+
+          for uuid in \
+            53626f786476 \
+            494363447256 \
+            4b45594d5354 \
+            0053545354ab \
+            474154454b45; do
+            grep -q "$uuid" "$EXTRACTOR" || {
+              echo "::error::A35x required trustlet UUID missing: $uuid"
+              exit 1
+            }
+          done
+
+          echo "::notice::A35x TEEGRIS extractor syntax and UUID checks passed"
+
       # ================================================================
       # PRUNE OPTIONAL CAMERA / NPU / VIDEO MODULES FOR RECOVERY
       # ================================================================
