@@ -204,7 +204,55 @@ jobs:
 
           lunch twrp_a35x-bp2a-eng
 
-          mka -j4 adbd "$BUILD_TARGET"
+          echo "=== Runner memory before Soong ==="
+          free -h
+          swapon --show
+          grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo || true
+          echo "=== cgroup memory limits/events ==="
+          for f in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.events; do
+            if [ -r "$f" ]; then
+              echo "--- $f"
+              cat "$f"
+            fi
+          done
+
+          # Keep a periodic resource trace while Soong/Ninja runs. This helps
+          # distinguish OOM pressure from an external GitHub Actions cancellation.
+          monitor_resources() {
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              echo "=== RESOURCE SAMPLE $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              free -h
+              grep -E 'MemAvailable|SwapFree' /proc/meminfo || true
+              if [ -r /proc/pressure/memory ]; then
+                cat /proc/pressure/memory
+              fi
+              if [ -r /sys/fs/cgroup/memory.events ]; then
+                cat /sys/fs/cgroup/memory.events
+              fi
+              sleep 30
+            done
+          }
+
+          mka -j4 adbd "$BUILD_TARGET" &
+          BUILD_PID=$!
+          monitor_resources &
+          MONITOR_PID=$!
+
+          set +e
+          wait "$BUILD_PID"
+          BUILD_STATUS=$?
+          kill "$MONITOR_PID" 2>/dev/null || true
+          wait "$MONITOR_PID" 2>/dev/null || true
+          set -e
+
+          echo "=== Runner memory after build ==="
+          free -h
+          swapon --show
+          if [ -r /sys/fs/cgroup/memory.events ]; then
+            cat /sys/fs/cgroup/memory.events
+          fi
+          echo "Build exit status: $BUILD_STATUS"
+          exit "$BUILD_STATUS"
 
       - name: Collect recovery output
         if: success()
