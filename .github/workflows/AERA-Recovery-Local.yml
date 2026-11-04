@@ -1,0 +1,317 @@
+name: AERA Recovery [A35x - Local PC]
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: AERA Android manifest branch
+        required: true
+        default: aera-16.0
+        type: choice
+        options:
+          - aera-16.0
+      DEVICE_TREE:
+        description: Device tree repository
+        required: true
+        default: https://github.com/christiandroid20/shrp_device_samsung_a35x
+        type: string
+      DEVICE_TREE_BRANCH:
+        description: Device tree branch
+        required: true
+        default: aera-crypto-fixes
+        type: string
+      BUILD_TARGET:
+        description: Recovery image target
+        required: true
+        default: recoveryimage
+        type: choice
+        options:
+          - recoveryimage
+      BUILD_JOBS:
+        description: Initial parallel build jobs (increase only after measuring RAM and HDD)
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "2"
+          - "4"
+          - "6"
+      RELEASE:
+        description: Publish a TEST GitHub Release after a successful build
+        required: true
+        default: true
+        type: boolean
+      RELEASE_LABEL:
+        description: Short test label shown in the release title
+        required: true
+        default: TEST - local PC build
+        type: string
+      DATA_STATUS:
+        description: Data decryption validation status (update only after device testing)
+        required: true
+        default: Not tested
+        type: choice
+        options:
+          - Not tested
+          - Tested - working
+          - Tested - failing
+      CHANGELOG:
+        description: Changes included in this recovery image
+        required: false
+        default: Initial AERA A35x local-runner test build
+        type: string
+      EXTRA_FEATURES:
+        description: Extra functions verified on the device (do not claim untested features)
+        required: false
+        default: None verified yet
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aera-a35x-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build AERA A35x on local Ryzen PC
+    runs-on: [self-hosted, linux, x64, a35x-builder]
+    timeout-minutes: 720
+
+    env:
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
+      DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      BUILD_JOBS: ${{ inputs.BUILD_JOBS }}
+
+    steps:
+      - name: Checkout builder workflow
+        uses: actions/checkout@v4
+
+      - name: Validate local Zorin build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== OS ==="
+          cat /etc/os-release
+          echo "=== CPU ==="
+          lscpu | grep -E 'Model name|CPU\(s\)|Thread|Core|Socket' || true
+          echo "=== MEMORY / SWAP ==="
+          free -h
+          swapon --show || true
+          echo "=== DISK ==="
+          df -h "$HOME"
+          echo "=== REQUIRED TOOLS ==="
+          for tool in git curl python3 java ccache make; do
+            command -v "$tool" >/dev/null || { echo "Missing required tool: $tool"; exit 1; }
+          done
+          java -version 2>&1 | grep -q 'version "21' || {
+            echo "AERA Android 16 requires JDK 21. Install it on Zorin before running this workflow."
+            exit 1
+          }
+          test "$(uname -m)" = x86_64
+          echo "Runner environment validated."
+
+      - name: Prepare persistent source and ccache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/aera-build" "$HOME/.cache/ccache" "$HOME/bin"
+          echo "Persistent source directory: $HOME/aera-build"
+          echo "Persistent ccache directory: $HOME/.cache/ccache"
+          df -h "$HOME/aera-build"
+          ccache -M 20G
+          ccache -s
+
+      - name: Install Repo launcher if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/bin/repo" ]; then
+            curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            chmod +x "$HOME/bin/repo"
+          fi
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/bin:$PATH"
+          repo version
+
+      - name: Initialize AERA manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/bin:$PATH"
+          WORK_DIR="$HOME/aera-build/AERA"
+          mkdir -p "$WORK_DIR"
+          cd "$WORK_DIR"
+          repo init -u https://github.com/AERA-Recovery/android_manifest.git -b "$MANIFEST_BRANCH"
+
+      - name: Sync AERA sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/bin:$PATH"
+          cd "$HOME/aera-build/AERA"
+          repo sync -c --force-sync --no-clone-bundle --no-tags -j4
+
+      - name: Fetch selected A35x device tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          TREE="$HOME/aera-build/AERA/device/samsung/a35x"
+          TREE_TMP="$RUNNER_TEMP/a35x-device-tree"
+          rm -rf "$TREE_TMP"
+          mkdir -p "$(dirname "$TREE")"
+          git clone --depth=1 --single-branch -b "$DEVICE_TREE_BRANCH" "$DEVICE_TREE" "$TREE_TMP"
+          DEVICE_COMMIT="$(git -C "$TREE_TMP" rev-parse HEAD)"
+          rm -rf "$TREE"
+          mv "$TREE_TMP" "$TREE"
+          echo "DEVICE_COMMIT=$DEVICE_COMMIT" >> "$GITHUB_ENV"
+          echo "Using device tree commit: $DEVICE_COMMIT"
+
+      - name: Configure A35x AERA product
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$HOME/aera-build/AERA"
+          TREE=device/samsung/a35x
+          cd "$TREE"
+          test -f AndroidProducts.mk
+          test -f BoardConfig.mk
+          test -f omni_a35x.mk
+          cp omni_a35x.mk twrp_a35x.mk
+          sed -i 's/omni_a35x.mk/twrp_a35x.mk/g' AndroidProducts.mk
+          sed -i 's/omni_a35x-eng/twrp_a35x-bp2a-eng/g' AndroidProducts.mk
+          sed -i 's/PRODUCT_NAME := omni_a35x/PRODUCT_NAME := twrp_a35x/' twrp_a35x.mk
+          test -f prebuilt/Image
+          test -f prebuilt/dtb.img
+          test -f prebuilt/dtbo.img
+          echo "A35x product configured."
+          strings prebuilt/Image | grep -m1 "Linux version" || true
+          echo "Device tree commit: $DEVICE_COMMIT"
+
+      - name: Build AERA Recovery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$HOME/aera-build/AERA"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export USE_CCACHE=1
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          export CCACHE_EXEC="$(command -v ccache)"
+          export GOMAXPROCS=4
+          export GOGC=50
+          export GOMEMLIMIT=16GiB
+
+          echo "=== Java ==="
+          java -version
+          echo "=== Initial resources ==="
+          free -h
+          swapon --show || true
+          df -h "$HOME/aera-build"
+          ccache -s
+
+          source build/envsetup.sh
+          lunch twrp_a35x-bp2a-eng
+
+          dump_resources() {
+            echo "=== RESOURCE SNAPSHOT $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+            free -h || true
+            swapon --show || true
+            grep -E 'MemAvailable|SwapFree' /proc/meminfo || true
+            [ ! -r /proc/pressure/memory ] || cat /proc/pressure/memory
+            df -h "$HOME/aera-build" || true
+            ccache -s || true
+          }
+
+          monitor_resources() {
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              echo "=== RESOURCE SAMPLE $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+              free -h
+              grep -E 'MemAvailable|SwapFree' /proc/meminfo || true
+              [ ! -r /proc/pressure/memory ] || cat /proc/pressure/memory
+              sleep 20
+            done
+          }
+
+          dump_resources
+          mka -j"$BUILD_JOBS" adbd "$BUILD_TARGET" &
+          BUILD_PID=$!
+          monitor_resources &
+          MONITOR_PID=$!
+
+          set +e
+          wait "$BUILD_PID"
+          BUILD_STATUS=$?
+          kill "$MONITOR_PID" 2>/dev/null || true
+          wait "$MONITOR_PID" 2>/dev/null || true
+          set -e
+
+          dump_resources
+          echo "Build exit status: $BUILD_STATUS"
+          exit "$BUILD_STATUS"
+
+      - name: Collect recovery output and checksum
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$HOME/aera-build/AERA/out/target/product/a35x"
+          test -d "$OUT"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          find "$OUT" -maxdepth 2 -type f \(
+            -name "recovery.img" -o -name "recovery.tar" -o -name "ramdisk-recovery.*"
+          \) -exec cp -v {} "$GITHUB_WORKSPACE/dist/" \;
+          test -s "$GITHUB_WORKSPACE/dist/recovery.img"
+          cd "$GITHUB_WORKSPACE/dist"
+          sha256sum * > SHA256SUMS.txt
+          ls -lh
+
+      - name: Upload GitHub Actions artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AERA-Recovery-A35x-Local
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Set build information
+        if: success()
+        shell: bash
+        run: echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub TEST Release
+        if: success() && inputs.RELEASE == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: AERA-A35x-LOCAL-${{ github.run_number }}
+          name: '[TEST - LOCAL] AERA A35x - ${{ inputs.RELEASE_LABEL }} - #${{ github.run_number }}'
+          prerelease: true
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            # TEST BUILD — AERA Recovery - Samsung Galaxy A35x
+
+            **Validation:** TEST / prerelease. Not an official stable release.
+            **Data decryption:** ${{ inputs.DATA_STATUS }}
+            **Changes in this image:** ${{ inputs.CHANGELOG }}
+            **Additional verified features:** ${{ inputs.EXTRA_FEATURES }}
+
+            - Build host: self-hosted Ryzen 5 5600G / Zorin OS
+            - Android manifest: ${{ inputs.MANIFEST_BRANCH }}
+            - Device: Samsung Galaxy A35 5G
+            - Codename: a35x
+            - Device tree: ${{ inputs.DEVICE_TREE }}
+            - Device branch: ${{ inputs.DEVICE_TREE_BRANCH }}
+            - Device commit: ${{ env.DEVICE_COMMIT }}
+            - Build jobs: ${{ inputs.BUILD_JOBS }}
+            - Build date: ${{ env.BUILD_DATE }}
+            - GitHub run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Kernel: device tree prebuilt/Image
+            Build target: recoveryimage
+
+            SHA256 checksums included.
