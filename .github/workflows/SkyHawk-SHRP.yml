@@ -18,6 +18,12 @@ on:
           - shrp-12.1
           - shrp-9.0
 
+      DEVICE_TREE_BRANCH:
+        description: 'Device tree branch'
+        required: true
+        default: 'shrp-a35x-android15-f218c7a'
+        type: string
+
       BUILD_TARGET:
         description: 'Build Target(s) — separados por coma: recovery,boot,vendor_boot'
         required: true
@@ -145,7 +151,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: shrp-a35x-android15-f218c7a
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
