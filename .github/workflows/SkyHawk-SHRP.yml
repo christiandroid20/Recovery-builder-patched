@@ -1194,6 +1194,44 @@ jobs:
             2>/dev/null || true
 
           echo ""
+          echo "Recovery image footprint report:"
+          PRODUCT_OUT="${GITHUB_WORKSPACE}/android-recovery/out/target/product/${DEVICE_NAME:-}"
+          REPORT="${GITHUB_WORKSPACE}/recovery-footprint.txt"
+          {
+            echo "Device: ${DEVICE_NAME:-unknown}"
+            echo "Product output: $PRODUCT_OUT"
+            echo ""
+            echo "=== Image component sizes ==="
+            for item in recovery.img kernel dtb.img dtbo.img recovery_dtbo.img ramdisk.img ramdisk-recovery.img; do
+              file="$PRODUCT_OUT/$item"
+              if [ -f "$file" ]; then
+                stat -c "%s bytes  %n" "$file"
+              fi
+            done
+            echo ""
+            echo "=== Recovery tree directory sizes ==="
+            for dir in recovery/root recovery/root/system recovery/root/vendor recovery/root/twres recovery/root/etc; do
+              if [ -d "$PRODUCT_OUT/$dir" ]; then
+                du -sh "$PRODUCT_OUT/$dir"
+              fi
+            done
+            echo ""
+            echo "=== Largest regular files in recovery/root (top 100) ==="
+            if [ -d "$PRODUCT_OUT/recovery/root" ]; then
+              find "$PRODUCT_OUT/recovery/root" -type f -printf '%s\t%p\n' 2>/dev/null | sort -nr | head -n 100
+            fi
+            echo ""
+            echo "=== Installed file manifests ==="
+            find "$PRODUCT_OUT" -maxdepth 1 -type f -name 'installed-files*' -print 2>/dev/null
+            for manifest in "$PRODUCT_OUT"/installed-files*; do
+              if [ -f "$manifest" ]; then
+                echo "--- $manifest"
+                sed -n '1,160p' "$manifest"
+              fi
+            done
+          } | tee "$REPORT"
+
+          echo ""
           echo "Security patch references:"
 
           grep -Rns \
@@ -1357,4 +1395,5 @@ jobs:
           name: shrp-build-log-${{ matrix.target }}-${{ github.run_id }}
           path: |
             shrp-build.log
+            recovery-footprint.txt
           if-no-files-found: warn
