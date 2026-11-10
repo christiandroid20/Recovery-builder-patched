@@ -145,7 +145,7 @@ jobs:
       # ============================================================
 
       DEVICE_TREE: https://github.com/christiandroid20/shrp_device_samsung_a35x.git
-      DEVICE_TREE_BRANCH: work/fkeymaster-integration
+      DEVICE_TREE_BRANCH: shrp-a35x-android15-f218c7a
 
       # ============================================================
       # YOUR FORK OF BOOTABLE/RECOVERY
