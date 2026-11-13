@@ -41,7 +41,8 @@ permissions:
 
 concurrency:
   group: aera-a35x-first-build
-  cancel-in-progress: false
+  # New fixes supersede stale first-build attempts on this dedicated branch.
+  cancel-in-progress: true
 
 jobs:
   build:
