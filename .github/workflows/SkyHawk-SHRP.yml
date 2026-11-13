@@ -1696,10 +1696,10 @@ jobs:
             Target: ${{ matrix.target }}
 
             Manifest:
-            ${MANIFEST}
+            ${{ env.MANIFEST }}
 
             Manifest branch:
-            ${MANIFEST_BRANCH}
+            ${{ env.MANIFEST_BRANCH }}
 
             Device Tree:
             ${{ env.DEVICE_TREE }}
