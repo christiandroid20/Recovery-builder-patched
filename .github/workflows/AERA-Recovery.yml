@@ -41,8 +41,8 @@ permissions:
 
 concurrency:
   group: aera-a35x-first-build
-  # New fixes supersede stale first-build attempts on this dedicated branch.
-  cancel-in-progress: true
+  # Never terminate an active Android build when another run is queued.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -264,28 +264,15 @@ jobs:
             done
           }
 
-          monitor_resources() {
-            while kill -0 "$BUILD_PID" 2>/dev/null; do
-              echo "=== RESOURCE SAMPLE $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
-              free -h
-              grep -E 'MemAvailable|SwapFree' /proc/meminfo || true
-              [ ! -r /proc/pressure/memory ] || cat /proc/pressure/memory
-              [ ! -r /sys/fs/cgroup/memory.events ] || cat /sys/fs/cgroup/memory.events
-              sleep 15
-            done
-          }
+          dump_memory_state
 
-          mka -j2 adbd "$BUILD_TARGET" &
-          BUILD_PID=$!
-          monitor_resources &
-          MONITOR_PID=$!
-
-          set +e
-          wait "$BUILD_PID"
+          # Run the Android build in the foreground so the normal mka/Ninja
+          # output is streamed directly to Actions. No background monitor
+          # competes for process management or interleaves RESOURCE SAMPLE
+          # records with compiler output.
+          echo "=== Starting AERA Android 16 recovery build ==="
+          mka -j2 adbd "$BUILD_TARGET"
           BUILD_STATUS=$?
-          kill "$MONITOR_PID" 2>/dev/null || true
-          wait "$MONITOR_PID" 2>/dev/null || true
-          set -e
 
           dump_memory_state
           echo "Build exit status: $BUILD_STATUS"
