@@ -88,7 +88,8 @@ jobs:
             pngcrush schedtool squashfs-tools \
             binutils file
 
-          git lfs install --global
+          git lfs version
+          git lfs install
 
       - name: Install JDK 21
         uses: actions/setup-java@v4
