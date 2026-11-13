@@ -213,7 +213,10 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
-          export GOMAXPROCS=2
+          # Keep Soong's Go concurrency aligned with the conservative
+          # three-job Ninja build. Retain the 4 GiB Go memory guardrail
+          # because the previous run showed significant runner memory pressure.
+          export GOMAXPROCS=3
           export GOGC=50
           export GOMEMLIMIT=4GiB
 
@@ -283,7 +286,7 @@ jobs:
 
           echo "=== Starting AERA Android 16 recovery build ==="
           set +e
-          mka -j2 adbd "$BUILD_TARGET"
+          mka -j3 adbd "$BUILD_TARGET"
           BUILD_STATUS=$?
           set -e
 
