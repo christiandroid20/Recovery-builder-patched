@@ -203,7 +203,10 @@ jobs:
       - name: Build AERA recovery image
         shell: bash
         run: |
-          set -euo pipefail
+          # Android envsetup/lunch/get_build_var are not nounset-safe (TOP is
+          # initially unset). Keep errexit and pipefail, but do not enable -u
+          # in this Android build shell.
+          set -eo pipefail
           cd "$WORK_DIR"
 
           export AERA_BUILD_DEVICE=a35x
