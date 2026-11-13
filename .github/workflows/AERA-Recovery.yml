@@ -266,16 +266,38 @@ jobs:
 
           dump_memory_state
 
-          # Run the Android build in the foreground so the normal mka/Ninja
-          # output is streamed directly to Actions. No background monitor
-          # competes for process management or interleaves RESOURCE SAMPLE
-          # records with compiler output.
+          # Keep the classic foreground mka/Ninja output. Capture the
+          # return code without errexit terminating the shell before the
+          # post-build diagnostics can run.
+          on_build_signal() {
+            signal_status="$1"
+            trap - INT TERM
+            echo "::warning::Build shell received a termination signal (status $signal_status)."
+            dump_memory_state || true
+            echo "=== Disk state at termination ==="
+            df -h "$WORK_DIR" || true
+            exit "$signal_status"
+          }
+          trap 'on_build_signal 130' INT
+          trap 'on_build_signal 143' TERM
+
           echo "=== Starting AERA Android 16 recovery build ==="
+          set +e
           mka -j2 adbd "$BUILD_TARGET"
           BUILD_STATUS=$?
+          set -e
 
+          echo "=== AERA build process returned ==="
           dump_memory_state
+          echo "=== Disk state after build ==="
+          df -h "$WORK_DIR" || true
           echo "Build exit status: $BUILD_STATUS"
+
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "::error::mka failed with exit status $BUILD_STATUS"
+            echo "=== Recent kernel messages (if permitted) ==="
+            dmesg --ctime 2>/dev/null | tail -n 80 || true
+          fi
           exit "$BUILD_STATUS"
 
       - name: Validate and collect recovery image
