@@ -1,6 +1,9 @@
 name: AERA Recovery [A35x]
 
 on:
+  push:
+    branches:
+      - aera-a35x-first-build
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
@@ -46,10 +49,10 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 720
     env:
-      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
-      DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
-      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
-      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH || 'aera-16.0' }}
+      DEVICE_TREE: ${{ inputs.DEVICE_TREE || 'https://github.com/christiandroid20/aera_device_samsung_a35x.git' }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH || 'aera-16.0-work' }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET || 'recoveryimage' }}
       WORK_DIR: ${{ github.workspace }}/AERA
       RECOVERY_PARTITION_SIZE: "100663296"
 
