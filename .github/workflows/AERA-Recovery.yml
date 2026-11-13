@@ -133,7 +133,6 @@ jobs:
             -c \
             --force-sync \
             --no-clone-bundle \
-            --no-tags \
             -j4
 
           test -f build/envsetup.sh
