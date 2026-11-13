@@ -304,8 +304,10 @@ jobs:
 
           if [ "$IMAGE_SIZE" -gt "$RECOVERY_PARTITION_SIZE" ]; then
             echo "::warning::recovery.img exceeds the A35X recovery partition. The artifact will be kept for analysis but MUST NOT be flashed."
+            FITS_PARTITION=false
             echo "RECOVERY_FITS_PARTITION=false" >> "$GITHUB_ENV"
           else
+            FITS_PARTITION=true
             echo "RECOVERY_FITS_PARTITION=true" >> "$GITHUB_ENV"
           fi
 
@@ -338,7 +340,7 @@ jobs:
             echo "Build target: $BUILD_TARGET"
             echo "Recovery partition limit: $RECOVERY_PARTITION_SIZE bytes"
             echo "Image size: $IMAGE_SIZE bytes"
-            echo "Fits recovery partition: ${RECOVERY_FITS_PARTITION:-unknown}"
+            echo "Fits recovery partition: $FITS_PARTITION"
             echo "Build UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > "$GITHUB_WORKSPACE/dist/BUILD-INFO.txt"
 
