@@ -42,15 +42,15 @@ concurrency:
 
 jobs:
   build:
-    name: Build AERA A35X — \${{ github.actor }}
+    name: Build AERA A35X — ${{ github.actor }}
     runs-on: ubuntu-22.04
     timeout-minutes: 720
     env:
-      MANIFEST_BRANCH: \${{ inputs.MANIFEST_BRANCH }}
-      DEVICE_TREE: \${{ inputs.DEVICE_TREE }}
-      DEVICE_TREE_BRANCH: \${{ inputs.DEVICE_TREE_BRANCH }}
-      BUILD_TARGET: \${{ inputs.BUILD_TARGET }}
-      WORK_DIR: \${{ github.workspace }}/AERA
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
+      DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      WORK_DIR: ${{ github.workspace }}/AERA
       RECOVERY_PARTITION_SIZE: "100663296"
 
     steps:
@@ -363,8 +363,8 @@ jobs:
         if: success() && inputs.RELEASE == true && env.RECOVERY_FITS_PARTITION == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: AERA-A35x-first-build-\${{ github.run_number }}
-          name: '[TEST] AERA Recovery A35x — First build #\${{ github.run_number }}'
+          tag_name: AERA-A35x-first-build-${{ github.run_number }}
+          name: '[TEST] AERA Recovery A35x — First build #${{ github.run_number }}'
           prerelease: true
           files: dist/*
           fail_on_unmatched_files: true
@@ -373,13 +373,13 @@ jobs:
             # TEST BUILD — AERA Recovery 16.0 / Samsung Galaxy A35 5G
 
             This is a first-build artifact, not a stable release.
-            - Manifest branch: \${{ inputs.MANIFEST_BRANCH }}
-            - Device tree: \${{ inputs.DEVICE_TREE }}
-            - Device branch: \${{ inputs.DEVICE_TREE_BRANCH }}
-            - Device commit: \${{ env.DEVICE_COMMIT }}
+            - Manifest branch: ${{ inputs.MANIFEST_BRANCH }}
+            - Device tree: ${{ inputs.DEVICE_TREE }}
+            - Device branch: ${{ inputs.DEVICE_TREE_BRANCH }}
+            - Device commit: ${{ env.DEVICE_COMMIT }}
             - Lunch target: twrp_a35x-bp2a-eng
-            - Build target: \${{ inputs.BUILD_TARGET }}
-            - Build date: \${{ env.BUILD_DATE }}
+            - Build target: ${{ inputs.BUILD_TARGET }}
+            - Build date: ${{ env.BUILD_DATE }}
 
             The build workflow verifies the Android boot-image magic and checks
             that recovery.img does not exceed the configured recovery partition.
